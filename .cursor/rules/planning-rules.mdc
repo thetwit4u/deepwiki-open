@@ -1,0 +1,13 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+### 🔄 Project Awareness & Context
+- **Always read `PLANNING.md`** at the start of a new conversation to understand the project's architecture, goals, style, and constraints.
+- **Check `TASKS.md`** before starting a new task. If the task isn’t listed or TASKS.md is not available, create or update TASKS.md and add the task with a brief description and today's date and before starting the new task always ask confirmation !!!  Don't add unit tests to the TASKS.md
+- **Use consistent naming conventions, file structure, and architecture patterns** as described in `PLANNING.md`
+
+### ✅ Task Completion
+- **Mark completed tasks in `TASKS.md`** immediately after finishing them.
+- Add new sub-tasks or TODOs discovered during development to `TASKS.md` under a “Discovered During Work” section.
