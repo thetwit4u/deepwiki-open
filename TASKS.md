@@ -32,27 +32,40 @@ For each major feature, implement both the backend API and the frontend UI in ta
 - [ ] Frontend: UI for selecting a repository (Next.js, shadcn/ui, Tailwind)
 - [ ] Test: End-to-end selection and state propagation
 
-### Step 2.2: Wiki Structure Overview
+### Step 2.2: Add New Repository & Wiki Generation
+- [ ] Backend: API to add a new repository (by URL or path)
+- [ ] Frontend: UI to add a new repository (form/input)
+- [ ] Backend: Trigger wiki structure generation for new repo
+- [ ] Frontend: Show progress indicator for scanning/indexing
+- [ ] Backend: API to report scanning/indexing progress
+- [ ] Test: End-to-end flow for adding, generating wiki, and progress feedback
+
+### Step 2.3: Wiki Structure Overview
 - [ ] Backend: API to return wiki structure (sections, hierarchy)
 - [ ] Frontend: UI to display wiki structure (sidebar/tree view)
 - [ ] Test: Structure loads and displays correctly
 
-### Step 2.3: Section Rendering (Content Pages)
+### Step 2.3.1: RAG Pipeline & Specialized Prompts (PRIORITY)
+- [ ] Backend: Implement RAG pipeline with embedding persistence and retrieval (triggered after repo copy/clone)
+- [ ] Backend: Implement specialized prompt/context logic for each wiki section type using RAG-retrieved context
+
+### Step 2.4: Section Rendering (Content Pages)
 - [ ] Backend: API to return section content (with prompts for consistency)
 - [ ] Frontend: UI to render section content (markdown/code/mermaid)
 - [ ] Test: Section loads and renders as expected
+- [ ] Backend: LLM-powered wiki page content generation (Markdown with front matter and mermaid support)
 
-### Step 2.4: Technical Summary Section
+### Step 2.5: Technical Summary Section
 - [ ] Backend: API to generate technical summary (languages, AWS, DBs, etc.)
 - [ ] Frontend: UI to display technical summary
 - [ ] Test: Summary is accurate and well-presented
 
-### Step 2.5: Mermaid Diagrams
+### Step 2.6: Mermaid Diagrams
 - [ ] Backend: API to generate mermaid diagrams for relevant sections
 - [ ] Frontend: UI to render mermaid diagrams (live preview)
 - [ ] Test: Diagrams render and update correctly
 
-### Step 2.6: Search & Navigation
+### Step 2.7: Search & Navigation
 - [ ] Backend: API for full-text search across wiki
 - [ ] Frontend: UI for search and navigation
 - [ ] Test: Search results are relevant and navigation is smooth
@@ -123,3 +136,16 @@ graph TD
 Once Phase 1 is complete, we'll proceed to:
 - Phase 2: Frontend & API Adjustments for Local Paths
 - Phase 3: Testing and Refinement 
+
+## Future Enhancements
+- [ ] Polish markdown and mermaid diagram styling for improved readability and UX
+- [ ] Add support for more markdown features (tables, images, task lists, images, etc.)
+- [ ] Implement full-text search across wiki content
+- [ ] Implement technical summary section with extracted repo stats and technologies
+- [ ] Add advanced features (e.g., export, multi-repo, user settings, etc.)
+- [ ] Further optimize performance and accessibility 
+
+## Discovered During Work
+- [ ] Add ability to delete a repository (remove from wiki-data/repos and all related data)
+- [ ] Add ability to refresh (re-clone/re-copy) a repository and re-run the pipeline 
+- [x] Move wiki structure/content generation functions to api/langgraph/wiki_structure.py and delete api/langgraph_rag.py (2024-07-26) 

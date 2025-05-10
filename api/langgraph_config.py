@@ -16,6 +16,7 @@ load_dotenv()
 DEFAULT_CHUNK_SIZE = 350
 DEFAULT_CHUNK_OVERLAP = 100
 DEFAULT_TOP_K = 20
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash-preview-04-17"  # Default Gemini model
 
 # OpenAI config
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
@@ -26,6 +27,9 @@ if not OPENAI_API_KEY:
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 if not GOOGLE_API_KEY:
     print("Warning: GOOGLE_API_KEY not found in environment variables.")
+
+# Default Gemini model from environment variable or fallback to default
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
 
 # Ollama config (for local models)
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
@@ -51,7 +55,7 @@ class GeneratorConfig(BaseModel):
     """Configuration for LLM generators."""
     
     provider: str = Field(default="google", description="Provider for LLM: 'google', 'openai', or 'ollama'")
-    model: str = Field(default="gemini-2.5-flash-preview-04-17", description="Model name for generation")
+    model: str = Field(default=GEMINI_MODEL, description="Model name for generation")
     temperature: float = Field(default=0.7, description="Temperature for generation")
     top_p: float = Field(default=0.8, description="Top p for generation")
     max_tokens: Optional[int] = Field(default=None, description="Max tokens for generation")
@@ -116,6 +120,10 @@ def get_config() -> LangGraphConfig:
     
     if os.environ.get("GENERATOR_MODEL"):
         config.generator.model = os.environ["GENERATOR_MODEL"]
+    
+    if os.environ.get("GEMINI_MODEL"):
+        if config.generator.provider == "google":
+            config.generator.model = os.environ["GEMINI_MODEL"]
     
     if os.environ.get("RETRIEVER_TOP_K"):
         config.retriever.top_k = int(os.environ["RETRIEVER_TOP_K"])
