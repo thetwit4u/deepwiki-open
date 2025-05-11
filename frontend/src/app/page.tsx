@@ -12,6 +12,9 @@ interface Repo {
   id: string;
   name: string;
   path: string;
+  status?: string;
+  has_structure?: boolean;
+  wiki_path?: string;
 }
 
 interface Section {

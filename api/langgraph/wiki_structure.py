@@ -55,8 +55,8 @@ def build_wiki_structure_from_requirements(repo_identifier: str, detected_types:
     """
     detected_types = detected_types or []
     sections = [
-        {"id": "overview", "title": "Home/Overview", "description": "Purpose, Goals, Context - Synthesized from README/code analysis", "tags": ["overview", "home"], "type": "general"},
-        {"id": "snapshot", "title": "Repository Snapshot / Key Statistics", "description": "File count, Languages, AWS services, Technologies - Analyzed from repo contents", "tags": ["snapshot", "statistics"], "type": "general"},
+        {"id": "home-overview", "title": "Home/Overview", "description": "Purpose, Goals, Context - Synthesized from README/code analysis", "tags": ["overview", "home"], "type": "general"},
+        {"id": "snapshot", "title": "Repository Snapshot / Key Statistics", "description": "File count, Languages, Comprehensive list of all AWS services used, Technologies - Analyzed from repo contents", "tags": ["snapshot", "statistics"], "type": "general"},
         {"id": "setup", "title": "Setup & Local Development", "description": "Prerequisites, Installation, Configuration, Running - Extracted from documentation, scripts, config", "tags": ["setup", "installation", "local"], "type": "general"},
         {"id": "architecture", "title": "Architecture & System Design", "description": "System structure, design choices, architecture diagram (Mermaid)", "tags": ["architecture", "design", "mermaid"], "type": "general"},
         {"id": "codebase", "title": "Codebase Structure & Key Components", "description": "Directory structure, module breakdown, entry points", "tags": ["codebase", "structure", "components"], "type": "general"},
@@ -83,10 +83,13 @@ def build_wiki_structure_from_requirements(repo_identifier: str, detected_types:
             sections.append({"id": t, "title": f"{t.title()} Specifics", "description": f"Auto-detected section for type: {t}", "tags": [t], "type": t})
     return sections
 
-def generate_wiki_structure_with_llm(repo_identifier: str, detected_types: list = None, repo_context: str = None, use_openai: bool = False, generation_config: dict = None, repo_context_path: str = None) -> list:
+def generate_wiki_structure_with_llm(repo_identifier: str, detected_types: list = None, repo_context: str = None, use_openai: bool = False, generation_config: dict = None, repo_context_path: str = None, force_reindex: bool = False) -> list:
     """
     Generate the wiki structure using the LLM, always including the base structure but allowing the LLM to add/merge/rename up to 2 extra sections (max 8 total).
     Falls back to deterministic structure if LLM fails or output is invalid.
+    
+    Parameters:
+        force_reindex: If True, always reindex repo files before RAG retrieval. Set to False (default) to use existing embeddings.
     """
     import subprocess
     import os
@@ -112,14 +115,14 @@ def generate_wiki_structure_with_llm(repo_identifier: str, detected_types: list 
     if repo_dir:
         try:
             from api.langgraph.graph import run_rag_pipeline
-            print(f"[WIKI-STRUCTURE] Running RAG retrieval for structure context...")
+            print(f"[WIKI-STRUCTURE] Running RAG retrieval for structure context{' with reindexing' if force_reindex else ' using existing embeddings'}...")
             rag_result = run_rag_pipeline(
                 repo_identifier=repo_dir,
                 query="What are the key files, modules, and documentation that define the structure and main features of this repository?",
                 embedding_provider="ollama_nomic",
                 generator_provider="gemini",
                 top_k=20,
-                skip_indexing=True,  # Assume embeddings already exist
+                skip_indexing=not force_reindex,  # Reindex if force_reindex is True
                 debug=True
             )
             retrieved_docs = rag_result.get("retrieved_documents", [])
@@ -170,7 +173,7 @@ Follow these instructions precisely:
 1.  **Understand the Wiki Structure Template:** You have access to a detailed definition of the desired wiki structure template. This template defines:
     * **Standard Sections (1-6):** These sections should always be included in the wiki outline and are as follows:
         1.  Home/Overview
-        2.  Repository Snapshot / Key Statistics
+        2.  Repository Snapshot / Key Statistics - IMPORTANT: This section must include all AWS services used in the repository
         3.  Setup & Local Development
         4.  Architecture & System Design
         5.  Codebase Structure & Key Components
@@ -260,10 +263,13 @@ Follow these instructions precisely:
         print(f"[WIKI-STRUCTURE] Error: {str(e)}. Falling back to deterministic structure.")
         return base_sections
 
-def get_wiki_structure(repo_identifier: str, detected_types: list = None, use_llm: bool = False, repo_context: str = None, use_openai: bool = False, generation_config: dict = None, repo_context_path: str = None) -> dict:
+def get_wiki_structure(repo_identifier: str, detected_types: list = None, use_llm: bool = False, repo_context: str = None, use_openai: bool = False, generation_config: dict = None, repo_context_path: str = None, force_reindex: bool = False) -> dict:
     """
     Generate the wiki structure for a repo, using a deterministic builder or LLM if use_llm=True.
     Persists the structure as /wiki-data/wikis/<repo-id>/structure.json.
+    
+    Parameters:
+        force_reindex: If True, reindex all repo files before RAG retrieval. Set to False (default) to use existing embeddings.
     """
     detected_types = detected_types or []
     if use_llm:
@@ -273,7 +279,8 @@ def get_wiki_structure(repo_identifier: str, detected_types: list = None, use_ll
             repo_context, 
             use_openai=use_openai,
             generation_config=generation_config,
-            repo_context_path=repo_context_path
+            repo_context_path=repo_context_path,
+            force_reindex=force_reindex
         )
     else:
         sections = build_wiki_structure_from_requirements(repo_identifier, detected_types)
@@ -296,17 +303,46 @@ def load_structure_from_disk(repo_identifier):
             return _json.load(f)
     return None
 
+def update_progress_file(progress_path, progress_data):
+    """
+    Write progress data to file with minimal lock time.
+    Uses a temporary file and atomic rename to avoid file corruption.
+    """
+    import tempfile
+    import os
+    import json
+    
+    # Write to temporary file first
+    fd, temp_path = tempfile.mkstemp(suffix='.json', prefix='progress_tmp_', dir=os.path.dirname(progress_path))
+    try:
+        with os.fdopen(fd, 'w') as f:
+            json.dump(progress_data, f, indent=2)
+        # Atomic rename to target file
+        os.replace(temp_path, progress_path)
+    except Exception as e:
+        # Clean up temp file in case of error
+        try:
+            os.unlink(temp_path)
+        except:
+            pass
+        print(f"Error updating progress file: {e}")
+
 def generate_section_content(
     repo_identifier: str,
     detected_types: list = None,
     sections_to_generate: list = None,
-    llm=None
+    llm=None,
+    force_reindex: bool = False
 ) -> dict:
     """
     Generate content for each wiki section using LLM. Each section is saved as a Markdown file with front matter and mermaid support.
+    
+    Parameters:
+        force_reindex: If True, reindex repo files before RAG operations. Set to False (default) to use existing embeddings.
     """
     import os
     import yaml
+    import json
     import re
     from datetime import datetime
     from langchain_core.prompts import ChatPromptTemplate
@@ -315,7 +351,7 @@ def generate_section_content(
     print(f"[SECTION-CONTENT] Starting content generation for repository: {repo_identifier}")
     structure = load_structure_from_disk(repo_identifier)
     if not structure:
-        structure = get_wiki_structure(repo_identifier, detected_types, use_llm=True)
+        structure = get_wiki_structure(repo_identifier, detected_types, use_llm=True, force_reindex=force_reindex)
     print(f"[SECTION-CONTENT] Got wiki structure with {len(structure['sections'])} sections")
     
     # Gather repo context (file list, README)
@@ -363,24 +399,30 @@ def generate_section_content(
     # For progress reporting
     progress_path = os.path.join(get_repo_data_dir(repo_identifier), "progress.json")
     if os.path.exists(progress_path):
-        with open(progress_path) as f:
-            progress = yaml.safe_load(f)
+        try:
+            with open(progress_path) as f:
+                progress = json.load(f)
+        except json.JSONDecodeError:
+            # Fallback in case file is corrupted
+            progress = {"status": "generating section content", "log": [], "sections": {}, "updated_at": datetime.utcnow().isoformat() + "Z"}
     else:
         progress = {"status": "generating section content", "log": [], "sections": {}, "updated_at": datetime.utcnow().isoformat() + "Z"}
+    
     progress["status"] = "generating section content"
-    progress["log"].append(f"Generating section content...")
-    with open(progress_path, "w") as f:
-        yaml.dump(progress, f)
+    progress["log"].append("Generating section content...")
+    # Use atomic write instead of direct file.write
+    update_progress_file(progress_path, progress)
     
     # Generate content for each section
-    for section in structure["sections"]:
+    for i, section in enumerate(structure["sections"]):
         section_id = section["id"]
         md_path = os.path.join(out_dir, f"{section_id}.md")
         if os.path.exists(md_path):
-            print(f"[SECTION-CONTENT] Skipping {section_id}, already exists.")
+            print(f"[SECTION-CONTENT] Skipping {section_id}, file already exists at: {md_path}")
             continue
-        # Compose prompt
-        prompt = f"""
+            
+        # Use specialized prompts based on section type
+        base_prompt = f"""
 You are an expert technical writer and code analyst. Generate a detailed Markdown page for the following wiki section, using the repository context provided.
 
 - The page must start with YAML front matter containing at least: title, description, tags, section_id, and generated_at.
@@ -398,29 +440,98 @@ Repository file structure:
 README content:
 {readme_content[:2000] if readme_content else '(No README found)'}
 """
+
+        # Specialized prompt for snapshot section with AWS services emphasis
+        if section_id == "snapshot":
+            # Try to get AWS-related files using RAG
+            aws_files = []
+            try:
+                from api.langgraph.graph import run_rag_pipeline
+                aws_query = "Find all files related to AWS services, including CloudFormation templates, Terraform files, AWS SDK usage, IAM policies, and configuration files for AWS services"
+                print(f"[SECTION-CONTENT] Running AWS service discovery{' with reindexing' if force_reindex else ' using existing embeddings'}...")
+                rag_result = run_rag_pipeline(
+                    repo_identifier=repo_dir if repo_dir else repo_identifier,
+                    query=aws_query,
+                    embedding_provider="ollama_nomic",
+                    skip_indexing=not force_reindex,  # Reindex if force_reindex is True
+                    top_k=15
+                )
+                if rag_result and "retrieved_documents" in rag_result:
+                    aws_files = [doc.metadata.get("file_path") for doc in rag_result["retrieved_documents"] if doc.metadata.get("file_path")]
+                    print(f"[SECTION-CONTENT] Found {len(aws_files)} AWS-related files through RAG")
+            except Exception as e:
+                print(f"[SECTION-CONTENT] Error retrieving AWS files: {e}")
+
+            prompt = f"""
+You are an expert technical writer and AWS cloud architect. Generate a detailed Markdown page for the "Repository Snapshot / Key Statistics" wiki section, with a strong focus on AWS services used.
+
+- The page must start with YAML front matter containing at least: title, description, tags, section_id, and generated_at.
+- Structure your response with clear headers and bullet points.
+- CRITICAL: Identify and list ALL AWS services used in this repository. For each AWS service:
+  * Include the service name
+  * Describe how it's used in this project
+  * Note any specific configurations or implementations
+  * Group related services together when appropriate
+- Also include general repository statistics like:
+  * File count by type/language
+  * Key technologies and frameworks used
+  * Main programming languages
+  * Repository size and structure summary
+- Use a table format where appropriate.
+- If possible, include a Mermaid diagram showing how AWS services interact.
+- Use information from the README and file structure as context.
+- Write clear, technical, and concise documentation using proper Markdown formatting.
+- Do not include any text outside the Markdown (no explanations, no code block wrappers).
+
+Section metadata:
+{yaml.safe_dump(section, sort_keys=False)}
+
+Repository file structure:
+{chr(10).join(file_list[:100])}
+
+README content:
+{readme_content[:2000] if readme_content else '(No README found)'}
+
+AWS-Related Files:
+{chr(10).join(aws_files) if aws_files else '(No AWS-specific files identified)'}
+"""
+        else:
+            prompt = base_prompt
+        
         chain = ChatPromptTemplate.from_messages([("user", prompt)]) | llm | StrOutputParser()
         try:
-            print(f"[SECTION-CONTENT] Generating content for section: {section_id}")
+            print(f"[SECTION-CONTENT] Generating content for section: {section_id} ({i+1}/{len(structure['sections'])})")
             md_content = chain.invoke({})
             # Remove code block wrappers if present
             md_content = re.sub(r'^```(?:markdown)?\\s*|```$', '', md_content.strip(), flags=re.MULTILINE).strip()
             with open(md_path, "w", encoding="utf-8") as f:
                 f.write(md_content)
+            
+            if "sections" not in progress:
+                progress["sections"] = {}
+            
             progress["sections"][section_id] = "done"
             progress["log"].append(f"Section {section_id} generated.")
-            with open(progress_path, "w") as f:
-                yaml.dump(progress, f)
+            # Use atomic write
+            update_progress_file(progress_path, progress)
         except Exception as e:
-            print(f"[SECTION-CONTENT] Error generating section {section_id}: {e}")
-            progress["sections"][section_id] = f"error: {e}"
-            progress["log"].append(f"Error generating section {section_id}: {e}")
-            with open(progress_path, "w") as f:
-                yaml.dump(progress, f)
+            error_message = str(e)
+            print(f"[SECTION-CONTENT] Error generating section {section_id}: {error_message}")
+            
+            if "sections" not in progress:
+                progress["sections"] = {}
+                
+            progress["sections"][section_id] = f"error: {error_message}"
+            progress["log"].append(f"Error generating section {section_id}: {error_message}")
+            # Use atomic write
+            update_progress_file(progress_path, progress)
+    
     progress["status"] = "done"
     progress["log"].append("Wiki page generation complete.")
     progress["finished_at"] = datetime.utcnow().isoformat() + "Z"
-    with open(progress_path, "w") as f:
-        yaml.dump(progress, f)
+    # Use atomic write
+    update_progress_file(progress_path, progress)
+    
     return {"status": "done", "sections": structure["sections"]}
 
 # --- Usage Example ---

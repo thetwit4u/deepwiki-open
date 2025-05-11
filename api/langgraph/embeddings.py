@@ -5,13 +5,21 @@ import os
 from langchain_openai import OpenAIEmbeddings
 from langchain_community.embeddings import OllamaEmbeddings
 
+class ChromaOllamaEmbeddingFunction:
+    def __init__(self, model, base_url):
+        from langchain_community.embeddings import OllamaEmbeddings
+        self.ollama = OllamaEmbeddings(model=model, base_url=base_url)
+    def __call__(self, input):
+        # ChromaDB expects input to be a list of strings
+        return self.ollama.embed_documents(input)
+
 def get_embedding_function(embedding_provider: str, api_config):
     """
     Returns the appropriate embedding function instance based on the provider string and config.
     """
     if embedding_provider == 'ollama_nomic':
         ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-        return OllamaEmbeddings(
+        return ChromaOllamaEmbeddingFunction(
             model=api_config.embedder_ollama.model,
             base_url=ollama_host
         )

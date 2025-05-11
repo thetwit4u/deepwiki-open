@@ -9,10 +9,11 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 import google.generativeai as genai
 from api.langgraph.graph import run_rag_pipeline
-from api.langgraph.wiki_structure import get_wiki_structure, generate_section_content, get_repo_data_dir
+from api.langgraph.wiki_structure import get_wiki_structure, generate_section_content, get_repo_data_dir, update_progress_file
 from starlette.status import HTTP_404_NOT_FOUND
 import shutil
 import subprocess
+from api.langgraph.chroma_utils import generate_collection_name, get_chroma_client
 
 # Configure logging
 logging.basicConfig(
@@ -253,15 +254,32 @@ async def analyse_repository(request: AnalyseRepositoryRequest = Body(...)):
 async def wiki_structure(
     repo_url: str = Query(..., description="Repository URL or path"),
     detected_types: Optional[str] = Query(None, description="Comma-separated list of detected types"),
-    use_llm: bool = Query(True, description="Whether to use LLM-powered structure generation (default: True)")
+    use_llm: bool = Query(True, description="Whether to use LLM-powered structure generation (default: True)"),
+    force_reindex: bool = Query(False, description="Whether to force reindexing all repo files (default: False)")
 ):
     """
     Return the generated wiki structure for a given repo. If not present, generates it.
     detected_types: optional, comma-separated (e.g. 'frontend,infrastructure')
     use_llm: optional, bool (default: True) - whether to use LLM-powered structure generation
+    force_reindex: optional, bool (default: False) - whether to force reindexing all repo files
     """
     types = [t.strip() for t in detected_types.split(",")] if detected_types else []
-    from api.langgraph.wiki_structure import load_structure_from_disk, get_wiki_structure
+    from api.langgraph.wiki_structure import load_structure_from_disk, get_wiki_structure, get_wiki_data_dir
+    
+    # Check if repo_url is actually a normalized repo ID (directory name)
+    import os
+    wikis_dir = os.path.join(get_wiki_data_dir(), "wikis")
+    direct_wiki_path = os.path.join(wikis_dir, repo_url)
+    
+    if os.path.isdir(direct_wiki_path):
+        # If it's a wiki folder name, load directly from that
+        structure_path = os.path.join(direct_wiki_path, "structure.json")
+        if os.path.exists(structure_path):
+            with open(structure_path, 'r') as f:
+                import json
+                return json.load(f)
+    
+    # If not a direct wiki folder or structure doesn't exist, proceed normally
     structure = load_structure_from_disk(repo_url)
     if not structure:
         structure = get_wiki_structure(
@@ -269,30 +287,88 @@ async def wiki_structure(
             detected_types=types, 
             use_llm=True,
             use_openai=False,  # Always use Gemini
-            generation_config=None
+            generation_config=None,
+            force_reindex=force_reindex
         )
     return structure
+
+def safe_load_progress(progress_path):
+    try:
+        with open(progress_path) as f:
+            return json.load(f)
+    except Exception as e:
+        return {"status": "error", "log": [f"Error reading progress file: {e}"], "error": str(e)}
 
 @app.get("/wiki-progress")
 async def wiki_progress(repo_url: str = Query(..., description="Repository URL or path"), detected_types: Optional[str] = Query(None, description="Comma-separated list of detected types")):
     """
-    Return the progress.json for a given repo. If not present, triggers section content generation (mocked for now).
+    Return the progress.json for a given repo. Non-blocking implementation that returns the latest progress data.
     """
     types = [t.strip() for t in detected_types.split(",")] if detected_types else []
-    from api.langgraph.wiki_structure import load_structure_from_disk, get_wiki_structure
-    structure = load_structure_from_disk(repo_url)
-    if not structure:
-        structure = get_wiki_structure(repo_url, types, use_llm=True)
-    # Use new directory structure
-    repo_dir = get_repo_data_dir(repo_url)
+    import os
+    from api.langgraph.wiki_structure import get_repo_data_dir, get_wiki_data_dir
+    
+    # Check if repo_url is actually a normalized repo ID (directory name)
+    wikis_dir = os.path.join(get_wiki_data_dir(), "wikis")
+    direct_wiki_path = os.path.join(wikis_dir, repo_url)
+    
+    if os.path.isdir(direct_wiki_path):
+        # If the repo_url is actually a directory name in wikis/, use it directly
+        repo_dir = direct_wiki_path
+    else:
+        # Otherwise normalize it to get the repo directory
+        repo_dir = get_repo_data_dir(repo_url)
+        
     progress_path = os.path.join(repo_dir, "progress.json")
-    if not os.path.exists(progress_path):
-        # Trigger generation (mocked)
-        generate_section_content(repo_url, types)
-    if not os.path.exists(progress_path):
-        return {"error": "Progress not found"}, HTTP_404_NOT_FOUND
-    with open(progress_path) as f:
-        return json.load(f)
+    
+    # Just return current progress file if it exists (non-blocking)
+    if os.path.exists(progress_path):
+        try:
+            import fcntl
+            import time
+            
+            def read_file_nonblocking(file_path, max_retries=3, retry_delay=0.05):
+                """Attempt to read a file without blocking, using non-blocking file locking."""
+                for attempt in range(max_retries):
+                    try:
+                        with open(file_path, "r") as f:
+                            # Try to get a shared (read) lock, but don't block
+                            try:
+                                fcntl.flock(f, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                                data = f.read()
+                                fcntl.flock(f, fcntl.LOCK_UN)
+                                return data
+                            except IOError:
+                                # File is locked, return None
+                                if attempt < max_retries - 1:
+                                    time.sleep(retry_delay)
+                                    continue
+                                return None
+                    except Exception as e:
+                        if attempt < max_retries - 1:
+                            time.sleep(retry_delay)
+                        else:
+                            raise e
+                return None
+            
+            # Try to read non-blocking first
+            file_content = read_file_nonblocking(progress_path)
+            if file_content is not None:
+                try:
+                    return json.loads(file_content)
+                except json.JSONDecodeError:
+                    # If we got partial JSON, return a simple status
+                    return {"status": "processing", "log": ["Processing repository..."], "error": "Progress file is being updated"}
+            
+            # If non-blocking read failed (file is locked), return a simple status
+            return {"status": "processing", "log": ["Processing repository..."], "error": "Progress file is currently locked"}
+            
+        except Exception as e:
+            # Return simple progress if file is being written to or corrupted
+            return {"status": "processing", "log": ["Processing repository..."], "error": f"Could not read progress file: {str(e)}"}
+    
+    # If no progress file exists yet
+    return {"status": "not_started", "log": ["Wiki generation not started yet."]}
 
 @app.get("/wiki-section")
 async def wiki_section(repo_url: str = Query(..., description="Repository URL or path"), section_id: str = Query(..., description="Section ID"), detected_types: Optional[str] = Query(None, description="Comma-separated list of detected types")):
@@ -300,11 +376,20 @@ async def wiki_section(repo_url: str = Query(..., description="Repository URL or
     Return the Markdown content for a given section. 404 if not found.
     """
     import os
-    from api.langgraph.wiki_structure import get_repo_data_dir
+    from api.langgraph.wiki_structure import get_repo_data_dir, get_wiki_data_dir, normalize_repo_id
     
-    # Use new directory structure
-    repo_dir = get_repo_data_dir(repo_url)
-    md_path = os.path.join(repo_dir, f"{section_id}.md")
+    # Check if repo_url is actually a normalized repo ID (directory name)
+    wikis_dir = os.path.join(get_wiki_data_dir(), "wikis")
+    direct_wiki_path = os.path.join(wikis_dir, repo_url)
+    
+    if os.path.isdir(direct_wiki_path):
+        # If the repo_url is actually a directory name in wikis/, use it directly
+        repo_dir = direct_wiki_path
+    else:
+        # Otherwise normalize it to get the repo directory
+        repo_dir = get_repo_data_dir(repo_url)
+    
+    md_path = os.path.join(repo_dir, "pages", f"{section_id}.md")
     
     if not os.path.exists(md_path):
         return PlainTextResponse("Section not found", status_code=HTTP_404_NOT_FOUND)
@@ -320,6 +405,7 @@ async def start_wiki_generation(
     temperature: Optional[float] = Body(0.7, embed=True, description="Temperature for generation (0.0-1.0)"),
     top_p: Optional[float] = Body(0.8, embed=True, description="Top-p sampling parameter (0.0-1.0)"),
     top_k: Optional[int] = Body(40, embed=True, description="Top-k sampling parameter"),
+    force_reindex: Optional[bool] = Body(False, embed=True, description="Whether to force reindexing all repo files (default: False)"),
     background_tasks: BackgroundTasks = None
 ):
     """
@@ -337,6 +423,7 @@ async def start_wiki_generation(
     - temperature: Temperature for generation (0.0-1.0)
     - top_p: Top-p sampling parameter (0.0-1.0)
     - top_k: Top-k sampling parameter
+    - force_reindex: Whether to force reindexing all repo files (default: False)
     """
     import os
     import json
@@ -394,124 +481,182 @@ async def start_wiki_generation(
         "model_config": model_config
     }
     
-    with open(progress_path, "w") as f:
-        json.dump(progress, f, indent=2)
+    update_progress_file(progress_path, progress)
         
     def pipeline():
         try:
+            # --- Clean up wiki data before reindexing ---
+            wiki_data_dir = os.path.join("wiki-data", "wikis", repo_id)
+            if os.path.exists(wiki_data_dir) and force_reindex:
+                try:
+                    shutil.rmtree(wiki_data_dir)
+                    print(f"Deleted existing wiki data for {repo_id} before reindexing.")
+                except Exception as e:
+                    print(f"Error deleting wiki data for {repo_id}: {e}")
+            
+            # Make sure wiki directories exist
+            os.makedirs(wiki_data_dir, exist_ok=True)
+            pages_dir = os.path.join(wiki_data_dir, "pages")
+            os.makedirs(pages_dir, exist_ok=True)
+            
+            # Check if content already exists and we're not forcing reindex
+            if not force_reindex and os.path.exists(os.path.join(wiki_data_dir, "structure.json")):
+                # Check if pages directory has content
+                if os.listdir(pages_dir):
+                    progress["status"] = "done"
+                    progress["log"].append("Wiki content already exists. Skipping regeneration.")
+                    progress["finished_at"] = datetime.utcnow().isoformat() + "Z"
+                    update_progress_file(progress_path, progress)
+                    return progress
+            
             # Step 1: Clone/copy repo if needed
+            progress["status"] = "cloning/copying repository"
+            progress["log"].append(f"Starting clone/copy step for repo: {repo_url}")
+            update_progress_file(progress_path, progress)
             repo_is_git = repo_url.startswith("http://") or repo_url.startswith("https://") or repo_url.startswith("git@")
             repo_dest = os.path.join(repos_dir, repo_id)
             wiki_data_dir = os.path.join("wiki-data", "wikis", repo_id)
             if not os.path.exists(repo_dest):
-                progress["status"] = "cloning/copying repository"
                 progress["log"].append(f"{'Cloning' if repo_is_git else 'Copying'} repository to {repo_dest}...")
-                with open(progress_path, "w") as f:
-                    json.dump(progress, f, indent=2)
+                update_progress_file(progress_path, progress)
                 if repo_is_git:
-                    # Clone repo
                     try:
                         subprocess.run(["git", "clone", repo_url, repo_dest], check=True)
                     except Exception as e:
                         progress["status"] = "error"
                         progress["log"].append(f"Error cloning repo: {e}")
-                        with open(progress_path, "w") as f:
-                            json.dump(progress, f, indent=2)
+                        update_progress_file(progress_path, progress)
                         return progress
                 else:
                     shutil.copytree(repo_url, repo_dest)
-            # --- Clean up wiki data before reindexing ---
-            if os.path.exists(wiki_data_dir):
-                try:
-                    shutil.rmtree(wiki_data_dir)
-                    progress["log"].append(f"Deleted existing wiki data for {repo_id} before reindexing.")
-                except Exception as e:
-                    progress["log"].append(f"Error deleting wiki data for {repo_id}: {e}")
-            os.makedirs(wiki_data_dir, exist_ok=True)
-            # --- RAG pipeline trigger follows ---
-            progress["status"] = "indexing (RAG pipeline)"
-            progress["log"].append("Running RAG pipeline (embedding/indexing)...")
-            with open(progress_path, "w") as f:
-                json.dump(progress, f, indent=2)
+            # --- Clean up ChromaDB collection before reindexing ---
+            collection_name = generate_collection_name(repo_dest)
+            client = get_chroma_client()
+            
+            # Check if collection exists first
+            collection_exists = False
             try:
-                run_rag_pipeline(repo_id, embedding_provider="ollama_nomic", skip_indexing=False)
+                collections = client.list_collections()
+                collection_exists = any(c.name == collection_name for c in collections)
+                print(f"ChromaDB collection check: '{collection_name}' {'exists' if collection_exists else 'does not exist'}")
+            except Exception as e:
+                print(f"Error checking ChromaDB collections: {e}")
+            
+            # Only delete the collection if force_reindex is True AND collection exists
+            if force_reindex and collection_exists:
+                try:
+                    print(f"Deleting existing ChromaDB collection '{collection_name}' because force_reindex=True.")
+                    client.delete_collection(collection_name)
+                    # Wait/retry to ensure deletion
+                    import time
+                    for _ in range(10):
+                        collections = client.list_collections()
+                        if not any(c.name == collection_name for c in collections):
+                            break
+                        time.sleep(0.2)
+                    else:
+                        print(f"Warning: Collection '{collection_name}' still exists after repeated deletion attempts.")
+                except Exception as e:
+                    print(f"Warning: Failed to delete ChromaDB collection '{collection_name}': {e}")
+            elif not collection_exists:
+                print(f"Note: No existing collection found. Will need to create embeddings even though force_reindex=False.")
+            elif not force_reindex:
+                print(f"Note: Using existing collection '{collection_name}' (force_reindex=False).")
+                    
+            # --- RAG pipeline trigger follows ---
+            # The first run will always create embeddings regardless of force_reindex setting
+            progress["status"] = "indexing (RAG pipeline)"
+            if not collection_exists:
+                progress["log"].append("Starting RAG pipeline with indexing (first-time indexing required)...")
+            else:
+                progress["log"].append(f"{'Starting' if force_reindex else 'Running'} RAG pipeline{' (with reindexing)' if force_reindex else ' (using existing embeddings)'}...")
+            update_progress_file(progress_path, progress)
+            try:
+                # Add a guard to ensure store_vectors_node is only called once per pipeline run
+                from api.langgraph.graph import run_rag_pipeline
+                pipeline_state = {"store_vectors_called": False}
+                def guarded_store_vectors_node(state):
+                    if pipeline_state["store_vectors_called"]:
+                        print("store_vectors_node already called for this pipeline run, skipping.")
+                        return state
+                    pipeline_state["store_vectors_called"] = True
+                    from api.langgraph.nodes.store_vectors import store_vectors_node
+                    return store_vectors_node(state)
+                # Patch the graph to use the guarded node
+                import api.langgraph.graph as graph_mod
+                graph_mod.store_vectors_node = guarded_store_vectors_node
+                
+                print(f"Calling RAG pipeline with skip_indexing={force_reindex is False}")
+                run_rag_pipeline(
+                    repo_dest,
+                    "What are the key files, modules, and documentation that define the structure, architecture, and main features of this repository? Include files that are essential for understanding how the project is organized and how its main components interact.",
+                    embedding_provider="ollama_nomic",
+                    skip_indexing=not force_reindex  # Note: If collection doesn't exist, run_rag_pipeline will index anyway
+                )
             except Exception as e:
                 progress["status"] = "error"
                 progress["log"].append(f"Error running RAG pipeline: {e}")
-                with open(progress_path, "w") as f:
-                    json.dump(progress, f, indent=2)
+                update_progress_file(progress_path, progress)
                 return progress
 
             progress["status"] = "scanning repository"
             progress["log"].append("Scanning repository...")
-            with open(progress_path, "w") as f:
-                json.dump(progress, f, indent=2)
-                
+            update_progress_file(progress_path, progress)
             # Step 2: Generate wiki structure (using specified model)
             model_desc = f"{model_name} (temp={temperature}, top_p={top_p})" if model != "deterministic" else "deterministic"
             progress["status"] = f"generating wiki structure ({model_desc})"
-            progress["log"].append(f"Generating wiki structure using {model_desc}...")
-            with open(progress_path, "w") as f:
-                json.dump(progress, f, indent=2)
-            
-            # Verify the repository path exists
+            progress["log"].append(f"Starting wiki structure generation using {model_desc}...")
+            update_progress_file(progress_path, progress)
             if not os.path.exists(repo_dest):
                 progress["status"] = "error"
                 progress["log"].append(f"Error: Repository path not found at {repo_dest}")
-                with open(progress_path, "w") as f:
-                    json.dump(progress, f, indent=2)
+                update_progress_file(progress_path, progress)
                 return
-            
-            # Determine if we should use LLM based on model parameter
             use_llm = model != "deterministic"
             use_openai = model == "openai"
-            
-            # Create generation_config to pass to the structure generation function
             generation_config = {
                 "temperature": temperature,
                 "top_p": top_p,
                 "top_k": top_k,
                 "model_name": model_name
             }
-            
             try:
-                # Store the original repo_url in the structure, but use repo_dest for context gathering
                 structure = get_wiki_structure(
-                    repo_url,  # Use original repo_url for identification 
-                    detected_types=types, 
+                    repo_url,
+                    detected_types=types,
                     use_llm=use_llm,
                     use_openai=use_openai if use_llm else False,
                     generation_config=generation_config,
-                    repo_context_path=repo_dest  # Pass the actual repository path for context
+                    repo_context_path=repo_dest,
+                    force_reindex=force_reindex
                 )
-                
                 progress["status"] = "wiki structure generated"
                 progress["log"].append(f"Wiki structure generated using {model_desc}.")
-                with open(progress_path, "w") as f:
-                    json.dump(progress, f, indent=2)
+                update_progress_file(progress_path, progress)
             except Exception as e:
                 progress["status"] = "error"
                 progress["log"].append(f"Error generating wiki structure: {str(e)}")
-                with open(progress_path, "w") as f:
-                    json.dump(progress, f, indent=2)
+                update_progress_file(progress_path, progress)
                 return
-                
             # Step 3: Generate section content
             progress["status"] = "generating section content"
-            progress["log"].append("Generating section content...")
-            with open(progress_path, "w") as f:
-                json.dump(progress, f, indent=2)
-            generate_section_content(repo_url, types)
-            progress["status"] = "done"
-            progress["log"].append("Wiki generation complete.")
-            progress["finished_at"] = datetime.utcnow().isoformat() + "Z"
-            with open(progress_path, "w") as f:
-                json.dump(progress, f, indent=2)
+            progress["log"].append("Starting section content generation...")
+            update_progress_file(progress_path, progress)
+            try:
+                generate_section_content(repo_url, types, force_reindex=force_reindex)
+                progress["status"] = "done"
+                progress["log"].append("Wiki generation complete.")
+                progress["finished_at"] = datetime.utcnow().isoformat() + "Z"
+                update_progress_file(progress_path, progress)
+            except Exception as e:
+                progress["status"] = "error"
+                progress["log"].append(f"Error generating section content: {str(e)}")
+                update_progress_file(progress_path, progress)
+                return progress
         except Exception as e:
             progress["status"] = "error"
             progress["log"].append(f"Error: {str(e)}")
-            with open(progress_path, "w") as f:
-                json.dump(progress, f, indent=2)
+            update_progress_file(progress_path, progress)
                 
     if background_tasks is not None:
         background_tasks.add_task(pipeline)
@@ -525,3 +670,60 @@ async def start_wiki_generation(
         "model": model,
         "model_config": model_config
     }
+
+@app.get("/list-wikis")
+async def list_wikis():
+    """
+    Return a list of all wikis that have been generated.
+    """
+    import os
+    from api.langgraph.wiki_structure import get_wiki_data_dir
+    
+    wikis_dir = os.path.join(get_wiki_data_dir(), "wikis")
+    os.makedirs(wikis_dir, exist_ok=True)
+    
+    wikis = []
+    try:
+        for wiki_id in os.listdir(wikis_dir):
+            wiki_path = os.path.join(wikis_dir, wiki_id)
+            if os.path.isdir(wiki_path):
+                # Check if this wiki has a structure.json file (indicator of a complete wiki)
+                structure_path = os.path.join(wiki_path, "structure.json")
+                has_structure = os.path.exists(structure_path)
+                
+                # Check if pages directory exists and has content
+                pages_dir = os.path.join(wiki_path, "pages")
+                has_pages = os.path.exists(pages_dir) and os.listdir(pages_dir)
+                
+                # Get progress info to check status
+                progress_path = os.path.join(wiki_path, "progress.json")
+                status = "unknown"
+                if os.path.exists(progress_path):
+                    try:
+                        with open(progress_path, "r") as f:
+                            progress = json.load(f)
+                            status = progress.get("status", "unknown")
+                    except:
+                        pass
+                
+                # Only include wikis that are either complete or in progress
+                if has_structure or status != "unknown":
+                    # Get repo path if available
+                    repo_path = ""
+                    repos_dir = os.path.join(get_wiki_data_dir(), "repos")
+                    if os.path.exists(os.path.join(repos_dir, wiki_id)):
+                        repo_path = os.path.join(repos_dir, wiki_id)
+                    
+                    wikis.append({
+                        "id": wiki_id,
+                        "name": wiki_id,
+                        "path": repo_path,
+                        "status": status,
+                        "has_structure": has_structure,
+                        "has_pages": has_pages,
+                        "wiki_path": wiki_path,
+                    })
+    except Exception as e:
+        print(f"Error listing wikis: {e}")
+    
+    return {"wikis": wikis}

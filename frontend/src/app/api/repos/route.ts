@@ -1,25 +1,28 @@
 import { NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
 
-const REPOS_DIR = path.resolve(process.cwd(), '../../wiki-data/repos');
-
-type Repo = { id: string; name: string; path: string };
+type Repo = { 
+  id: string; 
+  name: string; 
+  path: string;
+  status?: string;
+  has_structure?: boolean;
+};
 
 export async function GET() {
   let repos: Repo[] = [];
   try {
-    if (fs.existsSync(REPOS_DIR)) {
-      const entries = fs.readdirSync(REPOS_DIR, { withFileTypes: true });
-      repos = entries
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => ({
-          id: entry.name,
-          name: entry.name,
-          path: path.join('/repos', entry.name),
-        }));
+    // Call backend API instead of reading from filesystem
+    const backendUrl = process.env.BACKEND_URL || 'http://localhost:8001';
+    const res = await fetch(`${backendUrl}/list-wikis`);
+    
+    if (res.ok) {
+      const data = await res.json();
+      repos = data.wikis || [];
+    } else {
+      console.error('Failed to fetch wikis from backend:', await res.text());
     }
   } catch (err) {
+    console.error('Error fetching wikis:', err);
     // fallback to empty list
   }
   return NextResponse.json({ repos });
