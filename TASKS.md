@@ -157,4 +157,23 @@ Once Phase 1 is complete, we'll proceed to:
 - [x] Implement LLM-powered auto-fix for Mermaid diagram errors with a maximum of two attempts (2024-08-03)
 - [x] Fix chat functionality to use ollama_nomic embeddings instead of OpenAI embeddings (2024-05-12)
 - [x] Create test_wiki_embeddings.py to verify consistent use of ollama_nomic embeddings for wiki generation (2024-05-12)
-- [x] Add special handling for directory structure rendering with fixed-width font and proper formatting (2024-08-05) 
+- [x] Add special handling for directory structure rendering with fixed-width font and proper formatting (2024-08-05)
+- **[2023-05-04]** Improved directory structure rendering in frontend
+- **[2023-05-10]** Fixed collection name issue with customs_exchange_rate_main repository
+
+## Tasks
+
+### Completed
+- [x] Create test_wiki_embeddings.py to verify consistent use of ollama_nomic embeddings for wiki generation (2024-05-12)
+- [x] Add special handling for directory structure rendering with fixed-width font and proper formatting (2024-08-05)
+- [x] Fixed collection name issue with customs_exchange_rate_main repository (2024-05-10)
+
+### In Progress
+- None
+
+### To Do
+- None
+
+### Discovered During Work
+- The hash generation for collection names depends on the absolute path of the repository on disk, which can cause mismatches when accessing collections by repository ID alone.
+- Solution: Use the collection_name parameter explicitly with the exact name of the collection in ChromaDB. 

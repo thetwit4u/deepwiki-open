@@ -1531,6 +1531,7 @@ class ChatRequest(BaseModel):
     generator_provider: Optional[str] = Field("gemini", description="Generator model provider (gemini, openai, ollama)")
     embedding_provider: Optional[str] = Field("ollama_nomic", description="Embedding model provider (openai, ollama_nomic)")
     top_k: Optional[int] = Field(10, description="Number of documents to retrieve")
+    collection_name: Optional[str] = Field(None, description="Optional override for the ChromaDB collection name")
 
 class ChatResponse(BaseModel):
     """Model for chat response."""
@@ -1558,7 +1559,8 @@ async def chat(request: ChatRequest = Body(...)):
             query=request.message,
             generator_provider=request.generator_provider,
             embedding_provider=request.embedding_provider,
-            top_k=request.top_k
+            top_k=request.top_k,
+            collection_name=request.collection_name
         )
         
         return response
