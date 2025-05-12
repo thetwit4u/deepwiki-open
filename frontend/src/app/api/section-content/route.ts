@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import yaml from 'js-yaml';
 
 const mockContent: Record<string, string> = {
   intro: `# Introduction\n\nWelcome to the DeepWiki for this repository. Here you'll find documentation, guides, and technical overviews.`,
@@ -9,17 +10,85 @@ const mockContent: Record<string, string> = {
   faq: `# FAQ\n\n**Q:** How do I contribute?\n**A:** Fork the repo and submit a PR.`,
 };
 
+// Function to extract YAML frontmatter
+function extractFrontmatter(content: string): { metadata: any; content: string } {
+  // Check if content starts with ```yaml or ---
+  const yamlPattern = /^```yaml\s*\n([\s\S]*?)```\s*\n/;
+  const dashPattern = /^---\s*\n([\s\S]*?)---\s*\n/;
+  
+  let cleanedContent = content;
+  let metadata = {};
+  
+  try {
+    // Extract YAML frontmatter if it exists
+    if (yamlPattern.test(content)) {
+      const match = content.match(yamlPattern);
+      if (match && match[1]) {
+        metadata = yaml.load(match[1]) || {};
+        cleanedContent = content.replace(yamlPattern, '');
+      }
+    } else if (dashPattern.test(content)) {
+      const match = content.match(dashPattern);
+      if (match && match[1]) {
+        metadata = yaml.load(match[1]) || {};
+        cleanedContent = content.replace(dashPattern, '');
+      }
+    }
+  } catch (error) {
+    console.error('Error parsing frontmatter:', error);
+  }
+  
+  return {
+    metadata,
+    content: cleanedContent.trim()
+  };
+}
+
+// Function to unescape JSON string
+function unescapeJsonString(str: string): string {
+  // Replace escaped sequences with their actual characters
+  return str
+    .replace(/\\"/g, '"')
+    .replace(/\\n/g, '\n')
+    .replace(/\\r/g, '\r')
+    .replace(/\\t/g, '\t')
+    .replace(/\\\\/g, '\\')
+    .replace(/\\`/g, '`');
+}
+
 export async function GET(req: NextRequest) {
   const repo = req.nextUrl.searchParams.get('repo');
   const section = req.nextUrl.searchParams.get('section');
+  
+  console.log(`[FRONTEND DEBUG] section-content request with repo='${repo}', section='${section}'`);
+  
   if (!repo || !section) {
-    return NextResponse.json({ content: '# Section\n\nContent not found.' }, { status: 400 });
+    console.log(`[FRONTEND DEBUG] Missing parameters: repo=${repo}, section=${section}`);
+    return NextResponse.json({ content: '# Section\n\nContent not found.', metadata: {} }, { status: 400 });
   }
+  
   const backendUrl = process.env.BACKEND_URL || 'http://localhost:8001';
-  const res = await fetch(`${backendUrl}/wiki-section?repo_url=${encodeURIComponent(repo)}&section_id=${encodeURIComponent(section)}`);
+  const apiUrl = `${backendUrl}/wiki-section?repo_url=${encodeURIComponent(repo)}&section_id=${encodeURIComponent(section)}`;
+  
+  console.log(`[FRONTEND DEBUG] Calling backend at: ${apiUrl}`);
+  
+  const res = await fetch(apiUrl);
+  
   if (!res.ok) {
-    return NextResponse.json({ content: '# Section\n\nContent not found.' }, { status: 404 });
+    console.log(`[FRONTEND DEBUG] Backend returned error: ${res.status} ${res.statusText}`);
+    return NextResponse.json({ content: '# Section\n\nContent not found.', metadata: {} }, { status: 404 });
   }
-  const content = await res.text();
-  return NextResponse.json({ content });
+  
+  let rawContent = await res.text();
+  console.log(`[FRONTEND DEBUG] Received ${rawContent.length} bytes of content`);
+  
+  // Check if content looks like it's JSON-escaped (has \\n, \\\`, etc.)
+  if (rawContent.includes('\\n') || rawContent.includes('\\`') || rawContent.includes('\\\\')) {
+    rawContent = unescapeJsonString(rawContent);
+  }
+  
+  // Extract frontmatter and content
+  const { metadata, content } = extractFrontmatter(rawContent);
+  
+  return NextResponse.json({ content, metadata });
 } 

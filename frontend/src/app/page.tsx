@@ -30,8 +30,10 @@ export default function Home() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [selectedSection, setSelectedSection] = useState<string | null>(null);
   const [sectionContent, setSectionContent] = useState<string>("");
+  const [sectionMetadata, setSectionMetadata] = useState<any>({});
   const [contentLoading, setContentLoading] = useState(false);
   const [repoSearch, setRepoSearch] = useState("");
+  const [debugResponse, setDebugResponse] = useState<any>(null);
 
   const fetchRepos = () => {
     setLoading(true);
@@ -68,16 +70,29 @@ export default function Home() {
   useEffect(() => {
     if (selected && selectedSection) {
       setContentLoading(true);
-      fetch(
-        `/api/section-content?repo=${encodeURIComponent(
-          selected.id
-        )}&section=${encodeURIComponent(selectedSection)}`
-      )
+      const apiUrl = `/api/section-content?repo=${encodeURIComponent(
+        selected.id
+      )}&section=${encodeURIComponent(selectedSection)}`;
+      
+      console.log(`[DEBUG] Fetching section content from ${apiUrl}`);
+      
+      fetch(apiUrl)
         .then((res) => res.json())
-        .then((data) => setSectionContent(data.content || ""))
+        .then((data) => {
+          console.log(`[DEBUG] Received section content data:`, data);
+          setDebugResponse(data); // Store for debugging display
+          setSectionContent(data.content || "");
+          setSectionMetadata(data.metadata || {});
+          console.log(`[DEBUG] Content length: ${(data.content || "").length}`);
+          console.log(`[DEBUG] Metadata:`, data.metadata);
+        })
+        .catch(err => {
+          console.error(`[DEBUG] Error fetching content:`, err);
+        })
         .finally(() => setContentLoading(false));
     } else {
       setSectionContent("");
+      setSectionMetadata({});
     }
   }, [selected, selectedSection]);
 
@@ -92,7 +107,7 @@ export default function Home() {
   if (loading) return <div className="p-8">Loading repositories...</div>;
 
   if (!selected) {
-    return (
+  return (
       <div className="p-8 max-w-3xl mx-auto">
         <h2 className="text-2xl font-bold mb-2">Repository Management</h2>
         <div className="mb-8">
@@ -122,7 +137,18 @@ export default function Home() {
         {contentLoading ? (
           <div className="p-8 text-gray-500">Loading section content...</div>
         ) : (
-          <SectionContent content={sectionContent} />
+          <>
+            <SectionContent content={sectionContent} metadata={sectionMetadata} />
+            {/* Debug information */}
+            {process.env.NODE_ENV !== 'production' && (
+              <div className="mt-4 p-4 border border-gray-200 rounded bg-gray-50 text-xs">
+                <details>
+                  <summary className="font-bold cursor-pointer">Debug API Response</summary>
+                  <pre className="mt-2 overflow-auto">{JSON.stringify(debugResponse, null, 2)}</pre>
+                </details>
+              </div>
+            )}
+          </>
         )}
       </RepoDetailsCard>
     </div>

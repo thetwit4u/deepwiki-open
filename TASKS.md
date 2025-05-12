@@ -41,19 +41,19 @@ For each major feature, implement both the backend API and the frontend UI in ta
 - [ ] Test: End-to-end flow for adding, generating wiki, and progress feedback
 
 ### Step 2.3: Wiki Structure Overview
-- [ ] Backend: API to return wiki structure (sections, hierarchy)
-- [ ] Frontend: UI to display wiki structure (sidebar/tree view)
-- [ ] Test: Structure loads and displays correctly
+- [x] Backend: API to return wiki structure (sections, hierarchy)
+- [x] Frontend: UI to display wiki structure (sidebar/tree view)
+- [x] Test: Structure loads and displays correctly
 
 ### Step 2.3.1: RAG Pipeline & Specialized Prompts (PRIORITY)
-- [ ] Backend: Implement RAG pipeline with embedding persistence and retrieval (triggered after repo copy/clone)
-- [ ] Backend: Implement specialized prompt/context logic for each wiki section type using RAG-retrieved context
+- [x] Backend: Implement RAG pipeline with embedding persistence and retrieval (triggered after repo copy/clone)
+- [x] Backend: Implement specialized prompt/context logic for each wiki section type using RAG-retrieved context
 
 ### Step 2.4: Section Rendering (Content Pages)
-- [ ] Backend: API to return section content (with prompts for consistency)
-- [ ] Frontend: UI to render section content (markdown/code/mermaid)
-- [ ] Test: Section loads and renders as expected
-- [ ] Backend: LLM-powered wiki page content generation (Markdown with front matter and mermaid support)
+- [x] Backend: API to return section content (with prompts for consistency)
+- [x] Frontend: UI to render section content (markdown/code/mermaid)
+- [x] Test: Section loads and renders as expected
+- [x] Backend: LLM-powered wiki page content generation (Markdown with front matter and mermaid support)
 
 ### Step 2.5: Technical Summary Section
 - [ ] Backend: API to generate technical summary (languages, AWS, DBs, etc.)
@@ -148,4 +148,9 @@ Once Phase 1 is complete, we'll proceed to:
 ## Discovered During Work
 - [ ] Add ability to delete a repository (remove from wiki-data/repos and all related data)
 - [ ] Add ability to refresh (re-clone/re-copy) a repository and re-run the pipeline 
-- [x] Move wiki structure/content generation functions to api/langgraph/wiki_structure.py and delete api/langgraph_rag.py (2024-07-26) 
+- [x] Move wiki structure/content generation functions to api/langgraph/wiki_structure.py and delete api/langgraph_rag.py (2024-07-26)
+- [x] Fix YAML frontmatter handling to properly extract metadata and render clean content (2024-07-29)
+- [x] Standardize wiki page generation to use consistent frontmatter format (2024-07-29)
+- [x] Add regenerate-wiki endpoint to update existing wikis with standardized frontmatter (2024-07-29)
+- [x] Improve progress status handling by validating against actual content (2024-07-29)
+- [x] Add reset-wiki-status endpoint to fix incorrect status states (2024-07-29) 

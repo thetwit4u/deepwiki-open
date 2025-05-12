@@ -21,12 +21,24 @@ export default function AddRepoCard({ onRepoAdded }: AddRepoCardProps) {
     if (repoUrl && polling) {
       interval = setInterval(() => {
         fetch(`/api/progress?repo=${encodeURIComponent(repoUrl)}`)
-          .then((res) => res.json())
+          .then((res) => {
+            if (!res.ok) {
+              throw new Error(`Server returned ${res.status}: ${res.statusText}`);
+            }
+            return res.json();
+          })
           .then((data) => {
             setProgress(data.progress || 0);
             setStatus(data.status || "");
             setLog(data.log || []);
             setWikiStructure(data.wikiStructure || null);
+            
+            // Check for error status and handle it
+            if (data.status === "error") {
+              setError(data.error || "Error during processing");
+              setPolling(false);
+            }
+            
             if (data.status === "done") {
               setPolling(false);
               setTimeout(() => {
@@ -39,11 +51,17 @@ export default function AddRepoCard({ onRepoAdded }: AddRepoCardProps) {
               }, 1200);
             }
           })
-          .catch(() => {
-            setError("Failed to fetch progress");
-            setPolling(false);
+          .catch((err) => {
+            console.error("Progress fetch error:", err);
+            setError(`Failed to fetch progress: ${err.message}`);
+            // Don't stop polling right away on network errors, might be temporary
+            if ((err.message || "").includes("Failed to fetch") && polling) {
+              // Continue polling despite network error
+            } else {
+              setPolling(false);
+            }
           });
-      }, 800);
+      }, 400); // Poll twice as fast
     }
     return () => clearInterval(interval);
   }, [repoUrl, polling, onRepoAdded]);

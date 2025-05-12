@@ -13,11 +13,20 @@ export async function GET() {
   try {
     // Call backend API instead of reading from filesystem
     const backendUrl = process.env.BACKEND_URL || 'http://localhost:8001';
-    const res = await fetch(`${backendUrl}/list-wikis`);
+    const apiUrl = `${backendUrl}/list-wikis`;
+    
+    console.log(`[FRONTEND DEBUG] Fetching wikis from ${apiUrl}`);
+    
+    const res = await fetch(apiUrl);
     
     if (res.ok) {
       const data = await res.json();
       repos = data.wikis || [];
+      
+      console.log(`[FRONTEND DEBUG] Received ${repos.length} wikis from backend`);
+      repos.forEach((repo, i) => {
+        console.log(`[FRONTEND DEBUG]   Repo ${i+1}: id='${repo.id}', name='${repo.name}', status='${repo.status}'`);
+      });
     } else {
       console.error('Failed to fetch wikis from backend:', await res.text());
     }

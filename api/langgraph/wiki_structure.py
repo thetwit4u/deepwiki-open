@@ -11,15 +11,18 @@ import re
 import yaml
 
 def normalize_repo_id(repo_identifier: str) -> str:
-    """Create a safe directory name for the repo (hash or slug)."""
+    """Create a safe directory name for the repo."""
     if repo_identifier.startswith("http://") or repo_identifier.startswith("https://"):
         slug = repo_identifier.rstrip("/").split("/")[-1].replace(".git", "")
         owner = repo_identifier.rstrip("/").split("/")[-2]
         base = f"{owner}_{slug}"
     else:
         base = _os.path.basename(_os.path.abspath(repo_identifier))
-    short_hash = hashlib.md5(repo_identifier.encode()).hexdigest()[:8]
-    return f"{base}_{short_hash}"
+    
+    # Remove any unusual characters that might cause issues
+    base = re.sub(r'[^\w\-_\.]', '_', base)
+    
+    return base
 
 def get_wiki_data_dir() -> str:
     """
@@ -425,11 +428,24 @@ def generate_section_content(
         base_prompt = f"""
 You are an expert technical writer and code analyst. Generate a detailed Markdown page for the following wiki section, using the repository context provided.
 
-- The page must start with YAML front matter containing at least: title, description, tags, section_id, and generated_at.
+- The page must start with YAML front matter enclosed in triple dashes (---) containing at least: title, description, tags, section_id, and generated_at.
+- Example format for the YAML front matter:
+  ```
+  ---
+  title: Section Title
+  description: Brief description of the section
+  tags:
+    - Tag1
+    - Tag2
+  section_id: section-id
+  generated_at: 2023-10-27T10:00:00Z
+  ---
+  ```
 - If the section requires a diagram (see tags or description), include a mermaid code block with an appropriate diagram.
 - Use information from the README and file structure as context.
 - Write clear, technical, and concise documentation. Use Markdown formatting.
 - Do not include any text outside the Markdown (no explanations, no code block wrappers).
+- Do NOT use ```yaml or ```markdown blocks for the frontmatter - use only the triple dash format.
 
 Section metadata:
 {yaml.safe_dump(section, sort_keys=False)}
@@ -465,7 +481,19 @@ README content:
             prompt = f"""
 You are an expert technical writer and AWS cloud architect. Generate a detailed Markdown page for the "Repository Snapshot / Key Statistics" wiki section, with a strong focus on AWS services used.
 
-- The page must start with YAML front matter containing at least: title, description, tags, section_id, and generated_at.
+- The page must start with YAML front matter enclosed in triple dashes (---) containing at least: title, description, tags, section_id, and generated_at.
+- Example format for the YAML front matter:
+  ```
+  ---
+  title: Repository Snapshot / Key Statistics
+  description: Brief description of the section
+  tags:
+    - Tag1
+    - Tag2
+  section_id: section-id
+  generated_at: 2023-10-27T10:00:00Z
+  ---
+  ```
 - Structure your response with clear headers and bullet points.
 - CRITICAL: Identify and list ALL AWS services used in this repository. For each AWS service:
   * Include the service name
@@ -482,6 +510,7 @@ You are an expert technical writer and AWS cloud architect. Generate a detailed 
 - Use information from the README and file structure as context.
 - Write clear, technical, and concise documentation using proper Markdown formatting.
 - Do not include any text outside the Markdown (no explanations, no code block wrappers).
+- Do NOT use ```yaml or ```markdown blocks for the frontmatter - use only the triple dash format.
 
 Section metadata:
 {yaml.safe_dump(section, sort_keys=False)}
@@ -502,8 +531,22 @@ AWS-Related Files:
         try:
             print(f"[SECTION-CONTENT] Generating content for section: {section_id} ({i+1}/{len(structure['sections'])})")
             md_content = chain.invoke({})
-            # Remove code block wrappers if present
-            md_content = re.sub(r'^```(?:markdown)?\\s*|```$', '', md_content.strip(), flags=re.MULTILINE).strip()
+            
+            # Post-process the content to ensure consistent frontmatter format
+            # 1. First remove any code block wrappers if present
+            md_content = re.sub(r'^```(?:markdown|yaml)?(?:\s*\n)?|```$', '', md_content.strip(), flags=re.MULTILINE)
+            
+            # 2. Convert any ```yaml frontmatter to --- format
+            yaml_pattern = re.compile(r'^```yaml\s*\n([\s\S]*?)(?:\n```|$)', re.MULTILINE)
+            yaml_match = yaml_pattern.search(md_content)
+            if yaml_match:
+                yaml_content = yaml_match.group(1)
+                md_content = yaml_pattern.sub(f'---\n{yaml_content}\n---\n', md_content)
+                print(f"[SECTION-CONTENT] Converted ```yaml frontmatter to --- format for {section_id}")
+            
+            # 3. Ensure there's at least one empty line after frontmatter
+            md_content = re.sub(r'---\s*\n', '---\n\n', md_content)
+            
             with open(md_path, "w", encoding="utf-8") as f:
                 f.write(md_content)
             

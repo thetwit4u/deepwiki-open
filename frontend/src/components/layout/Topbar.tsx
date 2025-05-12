@@ -11,7 +11,7 @@ export default function Topbar() {
       {/* User Avatar */}
       <div className="flex items-center gap-2">
         <UserCircle size={32} className="text-gray-400" />
-        <span className="text-sm text-gray-700 font-medium">WW</span>
+        <span className="text-sm text-gray-700 font-medium">P.E.</span>
       </div>
     </header>
   );
