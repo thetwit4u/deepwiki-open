@@ -307,3 +307,21 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## ⭐ Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=AsyncFuncAI/deepwiki-open&type=Date)](https://star-history.com/#AsyncFuncAI/deepwiki-open&Date)
+
+## Useful Features
+
+### Direct Collection Name Access
+
+For repositories with special characters in their names, you can directly specify the collection name to bypass automatic resolution:
+
+```
+https://your-deepwiki-instance.com/?repo=repository_id&collection=collection_name
+```
+
+To find the correct collection name for a repository, use the utility script:
+
+```bash
+./check_collections.py repository_id
+```
+
+See `docs/CHAT_API_GUIDE.md` for more details.

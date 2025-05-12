@@ -21,6 +21,10 @@ function MermaidDiagram({ code, onDiagramFixed }: { code: string, onDiagramFixed
   const [isFixed, setIsFixed] = useState(false);
   const [expandedError, setExpandedError] = useState(false);
   const [changesMade, setChangesMade] = useState<string[]>([]);
+  // Store error history for better context between attempts
+  const [errorHistory, setErrorHistory] = useState<string[]>([]);
+  // Maximum number of allowed fix attempts
+  const MAX_FIX_ATTEMPTS = 3;
 
   useEffect(() => {
     setIsClient(typeof window !== "undefined");
@@ -31,6 +35,7 @@ function MermaidDiagram({ code, onDiagramFixed }: { code: string, onDiagramFixed
     setIsFixed(false);
     setExpandedError(false);
     setChangesMade([]);
+    setErrorHistory([]);
   }, [code]);
 
   const renderDiagram = async (diagramCode: string) => {
@@ -45,6 +50,9 @@ function MermaidDiagram({ code, onDiagramFixed }: { code: string, onDiagramFixed
       console.error("Mermaid rendering error:", err);
       const errorMessage = err instanceof Error ? err.message : String(err);
       setError(errorMessage);
+      
+      // Add error to history for future context
+      setErrorHistory(prev => [...prev, errorMessage]);
       
       // Show a more informative placeholder when diagram fails to render
       if (ref.current) {
@@ -68,11 +76,21 @@ function MermaidDiagram({ code, onDiagramFixed }: { code: string, onDiagramFixed
   }, [currentCode, id, isClient]);
 
   const handleAutoFix = async () => {
-    if (fixAttempts >= 2 || !error) return;
+    if (fixAttempts >= MAX_FIX_ATTEMPTS || !error) return;
     
     console.log("[FIX DEBUG] Starting handleAutoFix, current error:", error);
+    console.log("[FIX DEBUG] Error history:", errorHistory);
     setIsFixing(true);
     try {
+      // Create a comprehensive error context that includes the current error
+      // and, for subsequent attempts, the history of previous errors
+      let errorContext = error;
+      if (fixAttempts > 0 && errorHistory.length > 0) {
+        // Format a more detailed error message with history
+        errorContext = `Current error: ${error}\nPrevious errors: ${errorHistory.join("; ")}`;
+        console.log("[FIX DEBUG] Using expanded error context with history");
+      }
+      
       const response = await fetch('/api/fix-mermaid', {
         method: 'POST',
         headers: {
@@ -80,7 +98,7 @@ function MermaidDiagram({ code, onDiagramFixed }: { code: string, onDiagramFixed
         },
         body: JSON.stringify({
           diagram: currentCode,
-          error: error,
+          error: errorContext, // Send the enhanced error context
           attempt: fixAttempts + 1
         }),
       });
@@ -129,9 +147,13 @@ function MermaidDiagram({ code, onDiagramFixed }: { code: string, onDiagramFixed
           console.log("[FIX DEBUG] New diagram still has errors, not saving:", renderErr);
           // The new diagram still has errors, so we don't save it
           
+          // Add the new error to our history
+          const newErrorMessage = renderErr instanceof Error ? renderErr.message : String(renderErr);
+          setErrorHistory(prev => [...prev, newErrorMessage]);
+          
           // If this was the final attempt, show a more detailed error
-          if (fixAttempts + 1 >= 2) {
-            setError(renderErr instanceof Error ? renderErr.message : String(renderErr));
+          if (fixAttempts + 1 >= MAX_FIX_ATTEMPTS) {
+            setError(newErrorMessage);
           }
         }
       } else {
@@ -143,7 +165,9 @@ function MermaidDiagram({ code, onDiagramFixed }: { code: string, onDiagramFixed
       
       // Update the error state with the caught error message
       if (err instanceof Error) {
-        setError(`Failed to optimize diagram: ${err.message}`);
+        const newErrorMessage = `Failed to optimize diagram: ${err.message}`;
+        setError(newErrorMessage);
+        setErrorHistory(prev => [...prev, newErrorMessage]);
       }
     } finally {
       setIsFixing(false);
@@ -152,7 +176,7 @@ function MermaidDiagram({ code, onDiagramFixed }: { code: string, onDiagramFixed
 
   // Trigger auto-fix automatically when there's an error
   useEffect(() => {
-    if (error && !isFixing && fixAttempts < 2) {
+    if (error && !isFixing && fixAttempts < MAX_FIX_ATTEMPTS) {
       // Add a small delay to avoid immediate retries
       const timer = setTimeout(() => {
         handleAutoFix();
@@ -197,7 +221,7 @@ function MermaidDiagram({ code, onDiagramFixed }: { code: string, onDiagramFixed
               <span className={`text-sm font-medium ${isFixed ? 'text-green-700' : 'text-blue-700'}`}>
                 {isFixing ? 'Optimizing diagram...' : 
                  isFixed ? 'Diagram fixed successfully' : 
-                 fixAttempts >= 2 ? 'Diagram partially optimized' : 'Diagram needs optimization'}
+                 fixAttempts >= MAX_FIX_ATTEMPTS ? 'Diagram partially optimized' : 'Diagram needs optimization'}
               </span>
             </div>
             
@@ -215,24 +239,51 @@ function MermaidDiagram({ code, onDiagramFixed }: { code: string, onDiagramFixed
           {/* Error details panel - collapsed by default */}
           {expandedError && (
             <div className="px-3 py-2 bg-gray-50 border-t border-blue-100">
-              <p className="text-xs text-gray-700 font-medium mb-1">Error details:</p>
+              <p className="text-xs text-gray-700 font-medium mb-1">Current error:</p>
               <pre className="text-xs bg-gray-100 p-2 rounded overflow-x-auto whitespace-pre-wrap text-gray-700">
                 {error}
               </pre>
+              
+              {/* Show error history if we have made at least one attempt */}
+              {errorHistory.length > 0 && fixAttempts > 0 && (
+                <div className="mt-3">
+                  <p className="text-xs text-gray-700 font-medium mb-1">Previous errors:</p>
+                  <div className="text-xs bg-gray-100 p-2 rounded overflow-x-auto text-gray-700 max-h-24">
+                    {errorHistory.map((err, index) => (
+                      <div key={index} className="mb-1 pb-1 border-b border-gray-200 last:border-0">
+                        <span className="text-blue-600 font-medium">Attempt {index + 1}: </span>
+                        {err}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              
               <p className="text-xs text-gray-500 mt-2">
-                {fixAttempts < 2 ? 
-                  'Automatic repair in progress...' : 
-                  'Maximum repair attempts reached. The diagram may need manual adjustment.'}
+                {fixAttempts < MAX_FIX_ATTEMPTS ? 
+                  `Automatic repair in progress (${fixAttempts}/${MAX_FIX_ATTEMPTS} attempts made)...` : 
+                  `Maximum repair attempts reached (${MAX_FIX_ATTEMPTS}/${MAX_FIX_ATTEMPTS}). The diagram may need manual adjustment.`}
               </p>
+              
+              {/* Add helpful tips for common errors */}
+              <div className="mt-3 text-xs border-t border-gray-200 pt-2">
+                <p className="font-medium text-gray-700">Common fixes:</p>
+                <ul className="list-disc list-inside text-gray-600 mt-1">
+                  <li>Add quotes around node labels with spaces: <code className="bg-gray-200 px-1">A["Label with spaces"]</code></li>
+                  <li>Check graph direction (should be TD, LR, etc.)</li>
+                  <li>Verify all subgraphs have end statements</li>
+                  <li>Remove any non-diagram text or comments</li>
+                </ul>
+              </div>
             </div>
           )}
           
           {/* Status footer */}
           <div className={`px-3 py-1.5 text-xs ${isFixed ? 'bg-green-50 text-green-600' : 'bg-blue-50 text-blue-600'}`}>
             {isFixing ? (
-              <span>Attempt {fixAttempts + 1}/2...</span>
-            ) : fixAttempts >= 2 && !isFixed ? (
-              <span>Optimization attempted (2/2). Some issues may remain.</span>
+              <span>Attempt {fixAttempts + 1}/{MAX_FIX_ATTEMPTS}...</span>
+            ) : fixAttempts >= MAX_FIX_ATTEMPTS && !isFixed ? (
+              <span>Optimization attempted ({MAX_FIX_ATTEMPTS}/{MAX_FIX_ATTEMPTS}). Some issues may remain.</span>
             ) : isFixed ? (
               <span>Diagram successfully repaired in {fixAttempts} {fixAttempts === 1 ? 'attempt' : 'attempts'}.</span>
             ) : (

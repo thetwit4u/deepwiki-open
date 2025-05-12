@@ -10,9 +10,10 @@ interface ChatMessage {
 
 interface ChatPanelProps {
   repoId?: string;
+  collectionName?: string;
 }
 
-export default function ChatPanel({ repoId }: ChatPanelProps) {
+export default function ChatPanel({ repoId, collectionName }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -55,16 +56,25 @@ export default function ChatPanel({ repoId }: ChatPanelProps) {
     setIsLoading(true);
 
     try {
+      // Prepare request payload with optional collection name
+      const payload: any = {
+        repoId,
+        message: input,
+      };
+      
+      // Add collection name if provided
+      if (collectionName) {
+        console.log(`Using specific collection name: ${collectionName}`);
+        payload.collectionName = collectionName;
+      }
+      
       // Call the API
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          repoId,
-          message: input,
-        }),
+        body: JSON.stringify(payload),
       });
 
       if (!response.ok) {

@@ -37,6 +37,7 @@ export default function Home() {
   const [sectionMetadata, setSectionMetadata] = useState<any>({});
   const [contentLoading, setContentLoading] = useState(false);
   const [repoSearch, setRepoSearch] = useState("");
+  const [collectionName, setCollectionName] = useState<string | undefined>(undefined);
 
   const fetchRepos = () => {
     setLoading(true);
@@ -52,6 +53,13 @@ export default function Home() {
           const repoFromUrl = (data.repos || []).find((r: Repo) => r.id === repoIdFromUrl);
           if (repoFromUrl) {
             setSelected(repoFromUrl);
+            
+            // Check if there's a collection name in the URL
+            const collectionNameFromUrl = searchParams.get('collection');
+            if (collectionNameFromUrl) {
+              console.log(`Using collection name from URL: ${collectionNameFromUrl}`);
+              setCollectionName(collectionNameFromUrl);
+            }
           }
         }
       });
@@ -66,15 +74,19 @@ export default function Home() {
   const handleSelectRepo = (repo: Repo) => {
     setSelected(repo);
     
-    // Update the URL with the repo ID
+    // Update the URL with the repo ID and preserve collection name if it exists
     const params = new URLSearchParams();
     params.set('repo', repo.id);
+    if (collectionName) {
+      params.set('collection', collectionName);
+    }
     router.push(`/?${params.toString()}`);
   };
 
   // Handle deselect repo and remove from URL
   const handleDeselectRepo = () => {
     setSelected(null);
+    setCollectionName(undefined);
     router.push('/');
   };
 
@@ -82,12 +94,15 @@ export default function Home() {
   const handleSelectSection = (sectionId: string) => {
     setSelectedSection(sectionId);
     
-    // Update the URL with both repo and section IDs
+    // Update the URL with both repo and section IDs and preserve collection
     const params = new URLSearchParams();
     if (selected) {
       params.set('repo', selected.id);
     }
     params.set('section', sectionId);
+    if (collectionName) {
+      params.set('collection', collectionName);
+    }
     router.push(`/?${params.toString()}`);
   };
 
@@ -181,6 +196,9 @@ export default function Home() {
           <div>
             <h2 className="text-lg font-semibold">{selected.name}</h2>
             <div className="text-xs text-gray-500">{selected.path}</div>
+            {collectionName && (
+              <div className="text-xs text-green-600">Using collection: {collectionName}</div>
+            )}
           </div>
           <Button 
             onClick={handleDeselectRepo} 
@@ -202,7 +220,7 @@ export default function Home() {
           )}
           
           <div className="mt-1">
-            <ChatPanel repoId={selected.id} />
+            <ChatPanel repoId={selected.id} collectionName={collectionName} />
           </div>
         </div>
       </div>

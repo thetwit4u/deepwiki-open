@@ -11,11 +11,11 @@ from pydantic import BaseModel, Field
 import google.generativeai as genai
 from api.langgraph.graph import run_rag_pipeline
 from api.langgraph.chat import get_chat_response, Message
-from api.langgraph.wiki_structure import get_wiki_structure, generate_section_content, get_repo_data_dir, update_progress_file
+from api.langgraph.wiki_structure import get_wiki_structure, generate_section_content, get_repo_data_dir, update_progress_file, normalize_repo_id
 from starlette.status import HTTP_404_NOT_FOUND
 import shutil
 import subprocess
-from api.langgraph.chroma_utils import generate_collection_name, get_chroma_client
+from api.langgraph.chroma_utils import generate_collection_name, get_chroma_client, check_collection_exists, get_persistent_dir
 
 # Configure logging
 logging.basicConfig(
@@ -1168,7 +1168,7 @@ async def reset_wiki_status(
 class FixMermaidRequest(BaseModel):
     diagram: str = Field(..., description="The Mermaid diagram code with errors")
     error: str = Field(..., description="The error message from Mermaid.js")
-    attempt: int = Field(1, description="Current attempt number (1 or 2)")
+    attempt: int = Field(1, description="Current attempt number (1, 2, or 3)")
 
 class FixMermaidResponse(BaseModel):
     fixed_diagram: str = Field(..., description="The corrected Mermaid diagram code")
@@ -1277,7 +1277,35 @@ async def fix_mermaid(request: FixMermaidRequest = Body(...)):
             top_k=40
         )
         
-        # Create prompt with context about the error
+        # For retry attempts, decrease temperature slightly more for increased precision
+        if attempt > 1:
+            llm.temperature = max(0.1, 0.2 - (attempt - 1) * 0.05)
+        
+        # Create prompt with detailed context about the error
+        previous_attempt_context = ""
+        error_focus_instructions = ""
+        
+        if attempt > 1:
+            previous_attempt_context = f"""
+This is attempt #{attempt} to fix the diagram. Previous attempts were unsuccessful.
+The diagram still has errors after the previous fix attempt(s).
+"""
+            error_focus_instructions = f"""
+The current error message is: "{error_message}"
+
+Based on this specific error message, you need to:
+1. Identify exactly what syntax element is causing the error
+2. Make precise changes to fix that specific issue
+3. Also check for similar issues elsewhere in the diagram that might cause the same error
+"""
+        else:
+            previous_attempt_context = f"This is attempt #{attempt} to fix the diagram."
+            error_focus_instructions = f"""
+The error message is: "{error_message}"
+
+I need you to focus specifically on fixing the issue described in this error message.
+"""
+        
         prompt = f"""
 You are an expert in Mermaid diagram syntax. A user has a Mermaid diagram with errors that needs fixing.
 
@@ -1286,10 +1314,9 @@ DIAGRAM WITH ERRORS:
 {diagram}
 ```
 
-ERROR MESSAGE:
-{error_message}
+{previous_attempt_context}
 
-This is attempt #{attempt} to fix the diagram.
+{error_focus_instructions}
 
 Common Mermaid diagram issues include:
 1. Unquoted node labels containing spaces (should be in double quotes: A["Label with spaces"])
