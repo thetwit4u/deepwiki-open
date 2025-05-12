@@ -7,6 +7,7 @@ import SectionContent from "@/components/SectionContent";
 import AddRepoCard from "@/components/AddRepoCard";
 import RepoList from "@/components/RepoList";
 import RepoDetailsCard from "@/components/RepoDetailsCard";
+import ChatPanel from "@/components/ChatPanel";
 import { useRouter, useSearchParams } from "next/navigation";
 
 interface Repo {
@@ -36,7 +37,6 @@ export default function Home() {
   const [sectionMetadata, setSectionMetadata] = useState<any>({});
   const [contentLoading, setContentLoading] = useState(false);
   const [repoSearch, setRepoSearch] = useState("");
-  const [debugResponse, setDebugResponse] = useState<any>(null);
 
   const fetchRepos = () => {
     setLoading(true);
@@ -123,20 +123,14 @@ export default function Home() {
         selected.id
       )}&section=${encodeURIComponent(selectedSection)}`;
       
-      console.log(`[DEBUG] Fetching section content from ${apiUrl}`);
-      
       fetch(apiUrl)
         .then((res) => res.json())
         .then((data) => {
-          console.log(`[DEBUG] Received section content data:`, data);
-          setDebugResponse(data); // Store for debugging display
           setSectionContent(data.content || "");
           setSectionMetadata(data.metadata || {});
-          console.log(`[DEBUG] Content length: ${(data.content || "").length}`);
-          console.log(`[DEBUG] Metadata:`, data.metadata);
         })
         .catch(err => {
-          console.error(`[DEBUG] Error fetching content:`, err);
+          console.error(`Error fetching content:`, err);
         })
         .finally(() => setContentLoading(false));
     } else {
@@ -182,24 +176,36 @@ export default function Home() {
         selectedSection={selectedSection}
         onSelectSection={handleSelectSection}
       />
-      <RepoDetailsCard repo={selected} onDeselect={handleDeselectRepo}>
-        {contentLoading ? (
-          <div className="p-8 text-gray-500">Loading section content...</div>
-        ) : (
-          <>
-            <SectionContent content={sectionContent} metadata={sectionMetadata} />
-            {/* Debug information */}
-            {process.env.NODE_ENV !== 'production' && (
-              <div className="mt-4 p-4 border border-gray-200 rounded bg-gray-50 text-xs">
-                <details>
-                  <summary className="font-bold cursor-pointer">Debug API Response</summary>
-                  <pre className="mt-2 overflow-auto">{JSON.stringify(debugResponse, null, 2)}</pre>
-                </details>
-              </div>
-            )}
-          </>
-        )}
-      </RepoDetailsCard>
+      <div className="flex-1 pl-3 flex flex-col">
+        <div className="flex justify-between items-center mb-2 mt-1">
+          <div>
+            <h2 className="text-lg font-semibold">{selected.name}</h2>
+            <div className="text-xs text-gray-500">{selected.path}</div>
+          </div>
+          <Button 
+            onClick={handleDeselectRepo} 
+            size="sm" 
+            variant="outline"
+            className="text-xs h-7"
+          >
+            Choose another repo
+          </Button>
+        </div>
+        
+        <div className="flex flex-col space-y-3 flex-grow">
+          {contentLoading ? (
+            <div className="p-4 text-gray-500 text-center">Loading section content...</div>
+          ) : (
+            <>
+              <SectionContent content={sectionContent} metadata={sectionMetadata} />
+            </>
+          )}
+          
+          <div className="mt-1">
+            <ChatPanel repoId={selected.id} />
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
