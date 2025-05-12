@@ -17,14 +17,16 @@ def generate_collection_name(repo_identifier: str) -> str:
         else:
             repo_name = path_parts[-1].replace(".git", "")
             prefix = f"git_{repo_name}"
-        prefix = re.sub(r'[^\w\-_]', '_', prefix)
+        # Replace ALL non-alphanumeric characters with underscores
+        prefix = re.sub(r'[^a-zA-Z0-9]', '_', prefix)
         if len(prefix) > 60:
             short_hash = hashlib.md5(repo_identifier.encode()).hexdigest()[:10]
             prefix = f"{prefix[:50]}_{short_hash}"
     else:
         abs_path = os.path.abspath(repo_identifier)
         dir_name = os.path.basename(abs_path)
-        dir_name = re.sub(r'[^\w\-_]', '_', dir_name)
+        # Replace ALL non-alphanumeric characters with underscores
+        dir_name = re.sub(r'[^a-zA-Z0-9]', '_', dir_name)
         path_hash = hashlib.md5(abs_path.encode()).hexdigest()[:10]
         prefix = f"local_{dir_name}_{path_hash}"
     return prefix
@@ -127,6 +129,49 @@ def get_or_create_chroma_collection(collection_name: str, client=None, recreate:
     except Exception as e:
         print(f"Error managing collection '{collection_name}': {e}")
         raise ValueError(f"Failed to manage ChromaDB collection: {e}")
+
+def check_collection_exists(client, collection_name):
+    """Check if a ChromaDB collection exists for a given collection name.
+    
+    Args:
+        client: ChromaDB client
+        collection_name: Name of the collection to check
+        
+    Returns:
+        bool: True if collection exists, False otherwise
+    """
+    try:
+        # Try multiple approaches to handle different ChromaDB versions
+        
+        # Method 1: Try direct get_collection - works in all versions but raises
+        # an exception if collection doesn't exist
+        try:
+            client.get_collection(name=collection_name)
+            return True
+        except Exception as e:
+            if "does not exist" in str(e):
+                return False
+            # If it's a different error, try the next method
+            print(f"get_collection attempt failed with: {e}")
+        
+        # Method 2: Use list_collections - behavior varies by version
+        try:
+            collections = client.list_collections()
+            
+            # ChromaDB < 0.6.0 - collections have a name attribute
+            try:
+                return any(c.name == collection_name for c in collections)
+            except AttributeError:
+                # ChromaDB >= 0.6.0 - list_collections() returns collection names directly
+                return collection_name in collections
+        except Exception as e:
+            print(f"Error checking collection with list_collections: {e}")
+        
+        # If we get here, both methods failed - assume collection doesn't exist
+        return False
+    except Exception as e:
+        print(f"Error in check_collection_exists: {e}")
+        return False
 
 # Usage Example
 if __name__ == "__main__":

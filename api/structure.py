@@ -1,18 +1,21 @@
 import os as _os
 import json as _json
 from datetime import datetime as _datetime
+import re
 
 def normalize_repo_id(repo_identifier: str) -> str:
-    """Create a safe directory name for the repo (hash or slug)."""
-    import hashlib
+    """Create a safe directory name for the repo."""
     if repo_identifier.startswith("http://") or repo_identifier.startswith("https://"):
         slug = repo_identifier.rstrip("/").split("/")[-1].replace(".git", "")
         owner = repo_identifier.rstrip("/").split("/")[-2]
         base = f"{owner}_{slug}"
     else:
         base = _os.path.basename(_os.path.abspath(repo_identifier))
-    short_hash = hashlib.md5(repo_identifier.encode()).hexdigest()[:8]
-    return f"{base}_{short_hash}"
+    
+    # Replace ALL non-alphanumeric characters with underscores
+    base = re.sub(r'[^a-zA-Z0-9]', '_', base)
+    
+    return base
 
 def build_wiki_structure_from_requirements(repo_identifier: str, detected_types: list = None) -> list:
     """

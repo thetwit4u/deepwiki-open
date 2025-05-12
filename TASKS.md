@@ -138,7 +138,7 @@ Once Phase 1 is complete, we'll proceed to:
 - Phase 3: Testing and Refinement 
 
 ## Future Enhancements
-- [ ] Polish markdown and mermaid diagram styling for improved readability and UX
+- [x] Polish markdown and mermaid diagram styling for improved readability and UX (2024-08-05)
 - [ ] Add support for more markdown features (tables, images, task lists, images, etc.)
 - [ ] Implement full-text search across wiki content
 - [ ] Implement technical summary section with extracted repo stats and technologies
@@ -154,4 +154,7 @@ Once Phase 1 is complete, we'll proceed to:
 - [x] Add regenerate-wiki endpoint to update existing wikis with standardized frontmatter (2024-07-29)
 - [x] Improve progress status handling by validating against actual content (2024-07-29)
 - [x] Add reset-wiki-status endpoint to fix incorrect status states (2024-07-29)
-- [x] Implement LLM-powered auto-fix for Mermaid diagram errors with a maximum of two attempts (2024-08-03) 
+- [x] Implement LLM-powered auto-fix for Mermaid diagram errors with a maximum of two attempts (2024-08-03)
+- [x] Fix chat functionality to use ollama_nomic embeddings instead of OpenAI embeddings (2024-05-12)
+- [x] Create test_wiki_embeddings.py to verify consistent use of ollama_nomic embeddings for wiki generation (2024-05-12)
+- [x] Add special handling for directory structure rendering with fixed-width font and proper formatting (2024-08-05) 

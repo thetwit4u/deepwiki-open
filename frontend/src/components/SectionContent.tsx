@@ -5,6 +5,8 @@ import rehypeRaw from "rehype-raw";
 import mermaid from "mermaid";
 import { Card } from "@/components/ui/card";
 import { Badge } from "../components/ui/badge";
+import { DiagramChangesInfo } from "./ui/DiagramChangesInfo";
+import { DirectoryTree, isDirectoryStructure } from "./ui/DirectoryTree";
 
 let mermaidId = 0;
 function MermaidDiagram({ code, onDiagramFixed }: { code: string, onDiagramFixed?: (originalCode: string, fixedCode: string) => void }) {
@@ -17,6 +19,8 @@ function MermaidDiagram({ code, onDiagramFixed }: { code: string, onDiagramFixed
   const [originalCode, setOriginalCode] = useState(code);
   const [currentCode, setCurrentCode] = useState(code);
   const [isFixed, setIsFixed] = useState(false);
+  const [expandedError, setExpandedError] = useState(false);
+  const [changesMade, setChangesMade] = useState<string[]>([]);
 
   useEffect(() => {
     setIsClient(typeof window !== "undefined");
@@ -25,6 +29,8 @@ function MermaidDiagram({ code, onDiagramFixed }: { code: string, onDiagramFixed
     setError(null);
     setFixAttempts(0);
     setIsFixed(false);
+    setExpandedError(false);
+    setChangesMade([]);
   }, [code]);
 
   const renderDiagram = async (diagramCode: string) => {
@@ -40,16 +46,17 @@ function MermaidDiagram({ code, onDiagramFixed }: { code: string, onDiagramFixed
       const errorMessage = err instanceof Error ? err.message : String(err);
       setError(errorMessage);
       
-      // Don't show the error visually, just set a placeholder that an auto-fix is needed
+      // Show a more informative placeholder when diagram fails to render
       if (ref.current) {
         ref.current.innerHTML = `
-          <div class="flex items-center justify-center h-24 bg-gray-50 rounded border border-gray-200">
-            <div class="text-center">
-              <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 mx-auto text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <div class="flex flex-col items-center justify-center p-4 rounded bg-gray-50 border border-gray-200">
+            <div class="flex items-center justify-center">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
-              <p class="mt-2 text-sm text-gray-600">Optimizing diagram format...</p>
+              <h3 class="ml-2 text-base font-medium text-gray-700">Optimizing Diagram</h3>
             </div>
+            <p class="mt-2 text-sm text-gray-600">Automatic diagram repair in progress...</p>
           </div>
         `;
       }
@@ -78,7 +85,11 @@ function MermaidDiagram({ code, onDiagramFixed }: { code: string, onDiagramFixed
         }),
       });
       
-      if (!response.ok) throw new Error('Failed to get diagram fix');
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Failed to parse error response' }));
+        console.error('[FIX DEBUG] Error response:', errorData);
+        throw new Error(errorData.error || 'Failed to get diagram fix');
+      }
       
       const data = await response.json();
       console.log("[FIX DEBUG] Received fix data:", data);
@@ -88,6 +99,12 @@ function MermaidDiagram({ code, onDiagramFixed }: { code: string, onDiagramFixed
         const oldCode = currentCode;
         const newCode = data.fixed_diagram;
         console.log("[FIX DEBUG] Got fixed diagram, old length:", oldCode.length, "new length:", newCode.length);
+        
+        // If there were changes reported in the response, log them
+        if (data.changes_made && data.changes_made.length > 0) {
+          console.log("[FIX DEBUG] Changes made:", data.changes_made);
+          setChangesMade(data.changes_made);
+        }
         
         // Update the state
         setCurrentCode(data.fixed_diagram);
@@ -111,10 +128,23 @@ function MermaidDiagram({ code, onDiagramFixed }: { code: string, onDiagramFixed
         } catch (renderErr) {
           console.log("[FIX DEBUG] New diagram still has errors, not saving:", renderErr);
           // The new diagram still has errors, so we don't save it
+          
+          // If this was the final attempt, show a more detailed error
+          if (fixAttempts + 1 >= 2) {
+            setError(renderErr instanceof Error ? renderErr.message : String(renderErr));
+          }
         }
+      } else {
+        console.error('[FIX DEBUG] Response missing fixed_diagram field:', data);
+        throw new Error('Invalid response format');
       }
     } catch (err) {
       console.error('[FIX DEBUG] Error fixing diagram:', err);
+      
+      // Update the error state with the caught error message
+      if (err instanceof Error) {
+        setError(`Failed to optimize diagram: ${err.message}`);
+      }
     } finally {
       setIsFixing(false);
     }
@@ -135,22 +165,89 @@ function MermaidDiagram({ code, onDiagramFixed }: { code: string, onDiagramFixed
 
   if (!isClient) return <div className="my-4 text-gray-400">[Mermaid diagram will render on client]</div>;
   
+  // Create a function to toggle the expanded error state
+  const toggleErrorDetails = () => {
+    setExpandedError(!expandedError);
+  };
+  
   return (
     <div className="my-4">
       <div ref={ref} className="mb-2" />
-      {error && isFixing && (
-        <div className="flex items-center justify-center text-xs py-1 mt-1">
-          <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-          </svg>
-          <span className="text-blue-600">Adjusting diagram format...</span>
+      
+      {/* Status interface for diagram repair */}
+      {error && (
+        <div className={`mt-3 border rounded-md overflow-hidden ${isFixed ? 'border-green-200' : 'border-blue-200'}`}>
+          {/* Header bar */}
+          <div className={`px-3 py-2 flex items-center justify-between ${isFixed ? 'bg-green-50' : 'bg-blue-50'}`}>
+            <div className="flex items-center">
+              {isFixing ? (
+                <svg className="animate-spin h-4 w-4 text-blue-500 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+              ) : isFixed ? (
+                <svg className="h-4 w-4 text-green-500 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+              ) : (
+                <svg className="h-4 w-4 text-blue-500 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              )}
+              <span className={`text-sm font-medium ${isFixed ? 'text-green-700' : 'text-blue-700'}`}>
+                {isFixing ? 'Optimizing diagram...' : 
+                 isFixed ? 'Diagram fixed successfully' : 
+                 fixAttempts >= 2 ? 'Diagram partially optimized' : 'Diagram needs optimization'}
+              </span>
+            </div>
+            
+            {/* Show error details button - only when there's still an error */}
+            {error && !isFixed && (
+              <button 
+                onClick={toggleErrorDetails}
+                className="text-xs text-blue-600 hover:text-blue-800 hover:underline focus:outline-none"
+              >
+                {expandedError ? 'Hide details' : 'Show details'}
+              </button>
+            )}
+          </div>
+          
+          {/* Error details panel - collapsed by default */}
+          {expandedError && (
+            <div className="px-3 py-2 bg-gray-50 border-t border-blue-100">
+              <p className="text-xs text-gray-700 font-medium mb-1">Error details:</p>
+              <pre className="text-xs bg-gray-100 p-2 rounded overflow-x-auto whitespace-pre-wrap text-gray-700">
+                {error}
+              </pre>
+              <p className="text-xs text-gray-500 mt-2">
+                {fixAttempts < 2 ? 
+                  'Automatic repair in progress...' : 
+                  'Maximum repair attempts reached. The diagram may need manual adjustment.'}
+              </p>
+            </div>
+          )}
+          
+          {/* Status footer */}
+          <div className={`px-3 py-1.5 text-xs ${isFixed ? 'bg-green-50 text-green-600' : 'bg-blue-50 text-blue-600'}`}>
+            {isFixing ? (
+              <span>Attempt {fixAttempts + 1}/2...</span>
+            ) : fixAttempts >= 2 && !isFixed ? (
+              <span>Optimization attempted (2/2). Some issues may remain.</span>
+            ) : isFixed ? (
+              <span>Diagram successfully repaired in {fixAttempts} {fixAttempts === 1 ? 'attempt' : 'attempts'}.</span>
+            ) : (
+              <span>Preparing to optimize diagram...</span>
+            )}
+          </div>
         </div>
       )}
-      {error && fixAttempts >= 2 && !isFixed && !isFixing && (
-        <div className="text-center text-xs text-gray-500 mt-1">
-          <span>This diagram may need additional optimization</span>
-        </div>
+      
+      {/* Show changes made when diagram is fixed and there are changes to report */}
+      {isFixed && changesMade.length > 0 && (
+        <DiagramChangesInfo 
+          changes={changesMade} 
+          className="mt-2"
+        />
       )}
     </div>
   );
@@ -1006,6 +1103,16 @@ export default function SectionContent({ content, metadata = {}, onContentChange
               <h4 className="text-base font-semibold mt-2 mb-1" {...props}>{children}</h4>
             ),
             p: ({node, className, children, ...props}) => {
+              // Check if the paragraph content looks like a directory structure
+              const paragraphContent = React.Children.toArray(children)
+                .map(child => typeof child === 'string' ? child : '')
+                .join('');
+              
+              if (isDirectoryStructure(paragraphContent)) {
+                console.log("[PARAGRAPH DEBUG] Detected directory structure in paragraph");
+                return <DirectoryTree content={paragraphContent} />;
+              }
+              
               // First paragraph is included with "prose-p:first-of-type" in the parent className
               return (
                 <p className="my-2 leading-relaxed" {...props}>
@@ -1067,6 +1174,8 @@ export default function SectionContent({ content, metadata = {}, onContentChange
             ),
             code({node, className, children, ...props}) {
               const match = /language-(\w+)/.exec(className || "");
+              
+              // Handle Mermaid diagrams
               if (match && match[1] === "mermaid") {
                 // Make sure to console.log to check if this is being called properly
                 console.log("[CODE DEBUG] Rendering mermaid diagram, code length:", String(children).length);
@@ -1076,6 +1185,16 @@ export default function SectionContent({ content, metadata = {}, onContentChange
                     console.log("[CODE DEBUG] onDiagramFixed callback called!");
                     handleDiagramFixed(originalCode, fixedCode);
                   }}
+                />;
+              }
+              
+              // Handle directory structure listings (with or without language specification)
+              const codeContent = String(children);
+              if (isDirectoryStructure(codeContent)) {
+                console.log("[CODE DEBUG] Detected directory structure listing");
+                return <DirectoryTree 
+                  content={codeContent} 
+                  title={match ? `Directory Structure (${match[1]})` : "Directory Structure"}
                 />;
               }
               
@@ -1122,6 +1241,32 @@ export default function SectionContent({ content, metadata = {}, onContentChange
                 {...props}
               />
             ),
+            pre: ({node, children, ...props}) => {
+              // Check if pre content contains directory structure
+              const preContent = React.Children.toArray(children)
+                .map(child => {
+                  if (React.isValidElement(child) && child.props) {
+                    const childProps = child.props as { children?: React.ReactNode };
+                    return typeof childProps.children === 'string' 
+                      ? childProps.children 
+                      : '';
+                  }
+                  return typeof child === 'string' ? child : '';
+                })
+                .join('');
+              
+              if (isDirectoryStructure(preContent)) {
+                console.log("[PRE DEBUG] Detected directory structure in pre block");
+                return <DirectoryTree content={preContent} />;
+              }
+              
+              // Standard pre handling
+              return (
+                <pre className="bg-gray-900 p-4 overflow-x-auto text-gray-200 text-sm rounded-md my-4" {...props}>
+                  {children}
+                </pre>
+              );
+            },
           }}
         >
           {processedContent}

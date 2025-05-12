@@ -19,8 +19,9 @@ def normalize_repo_id(repo_identifier: str) -> str:
     else:
         base = _os.path.basename(_os.path.abspath(repo_identifier))
     
-    # Remove any unusual characters that might cause issues
-    base = re.sub(r'[^\w\-_\.]', '_', base)
+    # Replace ALL non-alphanumeric characters with underscores
+    # Including hyphens, dots, and any other special characters
+    base = re.sub(r'[^a-zA-Z0-9]', '_', base)
     
     return base
 

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { SendIcon } from "lucide-react";
@@ -16,37 +16,83 @@ export default function ChatPanel({ repoId }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  // Load chat history when repoId changes
+  useEffect(() => {
+    if (!repoId) return;
+    
+    const fetchChatHistory = async () => {
+      setIsLoadingHistory(true);
+      try {
+        const response = await fetch(`/api/chat?repoId=${encodeURIComponent(repoId)}`);
+        if (response.ok) {
+          const data = await response.json();
+          if (data.messages && Array.isArray(data.messages)) {
+            setMessages(data.messages);
+          }
+        } else {
+          console.error("Failed to load chat history:", await response.text());
+        }
+      } catch (error) {
+        console.error("Error loading chat history:", error);
+      } finally {
+        setIsLoadingHistory(false);
+      }
+    };
+    
+    fetchChatHistory();
+  }, [repoId]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim()) return;
+    if (!input.trim() || !repoId) return;
 
-    // Add user message
+    // Add user message immediately
     const userMessage: ChatMessage = { role: "user", content: input };
     setMessages(prev => [...prev, userMessage]);
     setInput("");
     setIsLoading(true);
 
-    // Mock API response - simulate 1-2 second delay
-    setTimeout(() => {
-      // Add mock assistant response
-      const mockResponses = [
-        "Based on the repository structure, this appears to be using a combination of Next.js for the frontend and FastAPI for the backend.",
-        "This project follows a modular architecture with clear separation between frontend and API components.",
-        "The repository contains RESTful API endpoints that handle data processing and retrieval operations.",
-        "From what I can see, this project implements a Retrieval Augmented Generation (RAG) pattern for handling documentation.",
-        "The codebase appears to use modern React patterns including hooks and functional components."
-      ];
+    try {
+      // Call the API
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          repoId,
+          message: input,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`API responded with status: ${response.status}`);
+      }
+
+      const data = await response.json();
       
-      const randomResponse = mockResponses[Math.floor(Math.random() * mockResponses.length)];
+      // Add assistant response
       const assistantMessage: ChatMessage = { 
         role: "assistant", 
-        content: `${randomResponse} Let me know if you have any other questions about the architecture or implementation details.` 
+        content: data.answer || "I couldn't generate a response based on the repository content."
       };
       
       setMessages(prev => [...prev, assistantMessage]);
+    } catch (error) {
+      console.error("Error calling chat API:", error);
+      
+      // Add error message
+      const errorMessage: ChatMessage = { 
+        role: "assistant", 
+        content: "I encountered an error while processing your request. Please try again." 
+      };
+      
+      setMessages(prev => [...prev, errorMessage]);
+    } finally {
       setIsLoading(false);
-    }, 1000 + Math.random() * 1000);
+    }
   };
 
   return (
@@ -57,7 +103,11 @@ export default function ChatPanel({ repoId }: ChatPanelProps) {
       </div>
       
       <div className="flex-1 overflow-auto mb-2 max-h-[200px] space-y-2">
-        {messages.length === 0 ? (
+        {isLoadingHistory ? (
+          <div className="text-sm text-gray-400 italic">
+            Loading chat history...
+          </div>
+        ) : messages.length === 0 ? (
           <div className="text-sm text-gray-400 italic">
             No messages yet. Start the conversation by asking a question.
           </div>
@@ -67,7 +117,7 @@ export default function ChatPanel({ repoId }: ChatPanelProps) {
               key={index} 
               className={`p-2 rounded-lg ${
                 message.role === "user" 
-                  ? "bg-blue-50 ml-6 border border-blue-100" 
+                  ? "bg-gray-100 ml-6 border border-gray-200" 
                   : "bg-gray-50 mr-6 border border-gray-100"
               }`}
             >
@@ -97,14 +147,14 @@ export default function ChatPanel({ repoId }: ChatPanelProps) {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder="Ask a question about this codebase..."
-          className="flex-1 px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
-          disabled={isLoading}
+          className="flex-1 px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-gray-500"
+          disabled={isLoading || !repoId}
         />
         <Button 
           type="submit" 
-          disabled={isLoading || !input.trim()}
+          disabled={isLoading || !input.trim() || !repoId}
           size="sm"
-          className="bg-blue-600 hover:bg-blue-700 h-7 w-7 p-0"
+          className="bg-gray-800 hover:bg-black h-7 w-7 p-0"
         >
           <SendIcon className="w-3 h-3" />
         </Button>

@@ -32,12 +32,16 @@ def store_vectors_node(state: RAGState) -> RAGState:
     chunks = state.get('chunks', [])
     embeddings = state.get('embeddings', [])
     repo_identifier = state.get('repo_identifier')
-    embedding_provider = state.get('embedding_provider', 'openai')
+    embedding_provider = state.get('embedding_provider', 'ollama_nomic')
 
     if not chunks or not repo_identifier:
         raise ValueError("Missing required data (chunks or repo_identifier) for vector storage.")
 
-    collection_name = generate_collection_name(repo_identifier)
+    # Use collection_name from state if provided, otherwise generate it
+    collection_name = state.get('collection_name')
+    if not collection_name:
+        collection_name = generate_collection_name(repo_identifier)
+    
     persistent_dir = get_persistent_dir()
     print(f"Storing vectors in ChromaDB collection '{collection_name}' at {persistent_dir} using {embedding_provider}")
 
@@ -70,35 +74,20 @@ def store_vectors_node(state: RAGState) -> RAGState:
                 print("Will attempt to recreate collection...")
                 force_recreate = True
                 exists = False
+            
             recreate = force_recreate or not api_config.update_existing_collections
-            if exists and recreate:
+            
+            if recreate and exists:
+                print(f"Recreating collection '{collection_name}' with {embedding_provider} embeddings")
                 try:
-                    print(f"Deleting existing collection '{collection_name}'")
-                    time.sleep(random.uniform(0.1, 0.5))
-                    client.delete_collection(collection_name)
-                    time.sleep(0.5)
-                    collections = client.list_collections()
-                    if any(c.name == collection_name for c in collections):
-                        print(f"Warning: Collection '{collection_name}' still exists after deletion attempt")
-                        client = None
-                    else:
-                        exists = False
+                    client.delete_collection(name=collection_name)
+                    print(f"Deleted existing collection '{collection_name}'")
+                    time.sleep(0.5)  # Small delay to ensure deletion completes
+                    exists = False
                 except Exception as del_error:
-                    print(f"Warning: Failed to delete collection: {del_error}")
-                    client = None
-            if client is None:
-                print("Recreating ChromaDB client...")
-                time.sleep(0.5)
-                lock_file = os.path.join(persistent_dir, ".lock")
-                if os.path.exists(lock_file):
-                    try:
-                        os.remove(lock_file)
-                        print(f"Removed lock file before client recreation: {lock_file}")
-                    except:
-                        pass
-                client = get_chroma_client(persistent_dir)
-                exists = False
-            chroma_collection = None
+                    print(f"Error deleting collection: {del_error}")
+                    # Continue even if deletion fails; we'll try to create it anyway
+            
             try:
                 if exists and not force_recreate:
                     print(f"Using existing collection '{collection_name}'")
@@ -107,6 +96,7 @@ def store_vectors_node(state: RAGState) -> RAGState:
                     except Exception as e:
                         print(f"Error accessing existing collection: {e}")
                         exists = False
+                
                 if not exists or force_recreate:
                     print(f"Creating new collection '{collection_name}'")
                     try:
@@ -114,88 +104,82 @@ def store_vectors_node(state: RAGState) -> RAGState:
                     except chromadb.errors.UniqueConstraintError:
                         print(f"Collection '{collection_name}' already exists during creation")
                         time.sleep(0.5)
-                        chroma_collection = client.get_collection(name=collection_name, embedding_function=embedding_function)
+                        try:
+                            chroma_collection = client.get_collection(name=collection_name, embedding_function=embedding_function)
+                        except Exception as e:
+                            raise ValueError(f"Failed to access collection after creation attempt: {e}")
                     except Exception as create_error:
                         raise ValueError(f"Failed to create collection: {create_error}")
-            except Exception as coll_error:
-                print(f"Error with collection: {coll_error}")
-                if retry_count == max_retries - 1:
-                    print("Attempting to recreate ChromaDB from scratch...")
-                    backup_dir = f"{persistent_dir}_backup_{int(time.time())}_{random.randint(1000, 9999)}"
-                    try:
-                        if os.path.exists(persistent_dir):
-                            shutil.copytree(persistent_dir, backup_dir)
-                            print(f"Created ChromaDB backup at {backup_dir}")
-                            lock_file = os.path.join(persistent_dir, ".lock")
-                            if os.path.exists(lock_file):
-                                os.remove(lock_file)
-                                print(f"Removed lock file: {lock_file}")
-                            temp_dir = f"{persistent_dir}_old_{int(time())}"
-                            os.rename(persistent_dir, temp_dir)
-                            print(f"Renamed old ChromaDB directory to {temp_dir}")
-                            os.makedirs(persistent_dir, exist_ok=True)
-                            client = chromadb.PersistentClient(path=persistent_dir)
-                            chroma_collection = client.create_collection(name=collection_name, embedding_function=embedding_function)
-                            print(f"Successfully recreated ChromaDB collection '{collection_name}'")
-                            try:
-                                shutil.rmtree(temp_dir)
-                            except:
-                                pass
-                    except Exception as rebuild_error:
-                        print(f"Failed to rebuild ChromaDB: {rebuild_error}")
-                        raise ValueError(f"Unable to rebuild ChromaDB after multiple attempts: {rebuild_error}")
+                
+                vectorstore = Chroma(
+                    client=client,
+                    collection_name=collection_name,
+                    embedding_function=embedding_function
+                )
+                doc_embeddings_list = state.get('embeddings', None)
+
+                if doc_embeddings_list is None or len(doc_embeddings_list) != len(chunks):
+                    print("Warning: state['embeddings'] not found or mismatched. Attempting to extract from chunk metadata.")
+                    doc_embeddings_list = []
+                    temp_chunks_for_metadata = []
+                    for chunk in chunks:
+                        meta_copy = dict(chunk.metadata)
+                        embedding_vector = meta_copy.pop('embedding', None)
+                        if embedding_vector is None:
+                            raise ValueError(f"Embedding not found in chunk metadata for chunk: {chunk.page_content[:50]}...")
+                        doc_embeddings_list.append(embedding_vector)
+                        temp_chunks_for_metadata.append(type('Chunk', (), {'metadata': meta_copy, 'page_content': chunk.page_content})())
+                    
+                    metadatas = [c.metadata for c in temp_chunks_for_metadata]
+                    texts = [c.page_content for c in temp_chunks_for_metadata]
                 else:
+                    metadatas = []
+                    for chunk in chunks:
+                        meta_copy = dict(chunk.metadata)
+                        meta_copy.pop('embedding', None)
+                        metadatas.append(meta_copy)
+                    texts = [chunk.page_content for chunk in chunks]
+
+                ids = [f"{collection_name}_{i}" for i in range(len(chunks))]
+                try:
+                    # Ensure embeddings are in the format ChromaDB expects (list of lists of floats)
+                    # Sometimes embeddings can be numpy arrays or other formats
+                    processed_embeddings = []
+                    for emb in doc_embeddings_list:
+                        # Convert numpy arrays to lists if needed
+                        if hasattr(emb, 'tolist'):
+                            processed_embeddings.append(emb.tolist())
+                        else:
+                            # Ensure it's a list of floats
+                            processed_embeddings.append([float(e) for e in emb])
+                    
+                    print(f"Adding {len(chunks)} documents to ChromaDB collection '{collection_name}'")
+                    print(f"First embedding vector sample: {processed_embeddings[0][:5]}... (length: {len(processed_embeddings[0])})")
+                    
+                    chroma_collection.add(
+                        embeddings=processed_embeddings,
+                        metadatas=metadatas,
+                        documents=texts,
+                        ids=ids
+                    )
+                    print(f"Successfully stored {len(chunks)} documents in ChromaDB collection '{collection_name}'")
+                    state['vectorstore'] = vectorstore
+                    state['collection_name'] = collection_name
+                    break
+                except Exception as e:
+                    print(f"Error adding vectors to collection: {e}")
+                    if retry_count == max_retries - 1:
+                        raise ValueError(f"Failed to add vectors to collection after {max_retries} attempts: {e}")
                     retry_count += 1
-                    print(f"Retrying collection creation (attempt {retry_count}/{max_retries})...")
+                    print(f"Retrying vector storage (attempt {retry_count}/{max_retries})...")
                     time.sleep(1)
                     continue
-            vectorstore = Chroma(
-                client=client,
-                collection_name=collection_name,
-                embedding_function=embedding_function
-            )
-            doc_embeddings_list = state.get('embeddings', None)
-
-            if doc_embeddings_list is None or len(doc_embeddings_list) != len(chunks):
-                print("Warning: state['embeddings'] not found or mismatched. Attempting to extract from chunk metadata.")
-                doc_embeddings_list = []
-                temp_chunks_for_metadata = []
-                for chunk in chunks:
-                    meta_copy = dict(chunk.metadata)
-                    embedding_vector = meta_copy.pop('embedding', None)
-                    if embedding_vector is None:
-                        raise ValueError(f"Embedding not found in chunk metadata for chunk: {chunk.page_content[:50]}...")
-                    doc_embeddings_list.append(embedding_vector)
-                    temp_chunks_for_metadata.append(type('Chunk', (), {'metadata': meta_copy, 'page_content': chunk.page_content})())
-                
-                metadatas = [c.metadata for c in temp_chunks_for_metadata]
-                texts = [c.page_content for c in temp_chunks_for_metadata]
-            else:
-                metadatas = []
-                for chunk in chunks:
-                    meta_copy = dict(chunk.metadata)
-                    meta_copy.pop('embedding', None)
-                    metadatas.append(meta_copy)
-                texts = [chunk.page_content for chunk in chunks]
-
-            ids = [f"{collection_name}_{i}" for i in range(len(chunks))]
-            try:
-                chroma_collection.add(
-                    embeddings=doc_embeddings_list,
-                    metadatas=metadatas,
-                    documents=texts,
-                    ids=ids
-                )
-                print(f"Successfully stored {len(chunks)} documents in ChromaDB collection '{collection_name}'")
-                state['vectorstore'] = vectorstore
-                state['collection_name'] = collection_name
-                break
             except Exception as e:
-                print(f"Error storing documents in ChromaDB: {e}")
+                print(f"Error working with collection: {e}")
                 if retry_count == max_retries - 1:
-                    raise ValueError(f"Failed to store vectors after multiple attempts: {e}")
+                    raise ValueError(f"Failed to work with collection after {max_retries} attempts: {e}")
                 retry_count += 1
-                print(f"Retrying vector storage (attempt {retry_count}/{max_retries})...")
+                print(f"Retrying collection operations (attempt {retry_count}/{max_retries})...")
                 time.sleep(1)
                 continue
         except Exception as e:

@@ -7,7 +7,7 @@ from api.langgraph.nodes.store_vectors import store_vectors_node
 from api.langgraph.nodes.retrieve import retrieve_node
 from api.langgraph.nodes.generate import generate_node
 from api.langgraph.nodes.memory import memory_node
-from api.langgraph.chroma_utils import generate_collection_name, get_persistent_dir
+from api.langgraph.chroma_utils import generate_collection_name, get_persistent_dir, check_collection_exists
 from langchain_community.vectorstores import Chroma
 from api.langgraph.embeddings import get_embedding_function
 import time
@@ -15,6 +15,7 @@ import os
 import traceback
 from datetime import datetime
 import chromadb
+from langchain_openai import OpenAIEmbeddings
 
 # --- Graph Construction ---
 def get_rag_graph():
@@ -90,62 +91,59 @@ def run_retrieval_only_pipeline(state: RAGState, collection_name: str, api_confi
     try:
         persistent_dir = get_persistent_dir()
         client = chromadb.PersistentClient(path=persistent_dir)
-        collections = client.list_collections()
-        if not any(c.name == collection_name for c in collections):
-            print(f"Collection '{collection_name}' not found. Falling back to full indexing.")
-            return debug_rag_pipeline(state)
         
-        embedding_provider = state.get('embedding_provider', 'openai')
+        # Check if the collection exists using the check_collection_exists utility
+        if not check_collection_exists(client, collection_name):
+            print(f"Collection '{collection_name}' not found. Cannot proceed with retrieval-only mode.")
+            raise ValueError(f"Collection '{collection_name}' not found. Please generate the wiki first.")
+        
+        embedding_provider = state.get('embedding_provider', 'ollama_nomic')
+        print(f"Using {embedding_provider} embeddings for retrieval")
+        
+        # Get the embedding function based on the provider
         embedding_function = get_embedding_function(embedding_provider, api_config)
         
+        # Setup the vectorstore with the specified collection and embedding function
+        print(f"Loading ChromaDB collection '{collection_name}' for retrieval")
         vectorstore = Chroma(
-            client=client, 
+            client=client,
             collection_name=collection_name,
             embedding_function=embedding_function
         )
-        result_state['vectorstore'] = vectorstore
-        result_state['collection_name'] = collection_name
-        print(f"Successfully connected to collection '{collection_name}' using {embedding_provider}")
+        
+        result_state["vectorstore"] = vectorstore
+        result_state["collection_name"] = collection_name
+        
+        # Proceed with the retrieval and generation nodes
+        print("\n==== Running node: retrieve ====")
+        result_state = retrieve_node(result_state)
+        
+        print("\n==== Running node: generate ====")
+        result_state = generate_node(result_state)
+        
+        if "memory" in result_state:
+            print("\n==== Running node: memory ====")
+            result_state = memory_node(result_state)
+        
+        print("\n==== RETRIEVAL-ONLY PIPELINE COMPLETE ====")
+        return result_state
     except Exception as e:
-        print(f"Error connecting to ChromaDB: {e}. Falling back to full indexing.")
-        return debug_rag_pipeline(state)
-    node_sequence = [
-        ("retrieve", retrieve_node),
-        ("generate", generate_node),
-        ("memory", memory_node)
-    ]
-    for node_name, node_func in node_sequence:
-        try:
-            print(f"\n==== Running node: {node_name} ====")
-            start_time = time.time()
-            try:
-                result_state = node_func(result_state)
-                elapsed_time = time.time() - start_time
-                print(f"Node {node_name} completed in {elapsed_time:.2f} seconds")
-            except Exception as e:
-                elapsed_time = time.time() - start_time
-                print(f"\n==== ERROR in node {node_name} after {elapsed_time:.2f} seconds ====\nError: {str(e)}")
-                traceback.print_exc()
-                result_state[f"error_{node_name}"] = str(e)
-                result_state[f"error_traceback_{node_name}"] = traceback.format_exc()
-                print(f"Non-critical node {node_name} failed. Attempting to continue.")
-                continue
-        except Exception as e:
-            print(f"\n==== UNEXPECTED ERROR for node {node_name} ====\nError: {str(e)}")
-            traceback.print_exc()
-    print(f"\n==== RETRIEVAL-ONLY PIPELINE COMPLETE ====")
-    return result_state
+        print(f"Error in retrieval-only pipeline: {e}")
+        traceback.print_exc()
+        result_state["error_retrieval"] = str(e)
+        return result_state
 
 def run_rag_pipeline(
     repo_identifier: str,
     query: str,
     generator_provider: str = "gemini", # gemini, openai, ollama
-    embedding_provider: str = "openai", # openai, ollama_nomic
+    embedding_provider: str = "ollama_nomic", # openai, ollama_nomic
     top_k: int = None,
     memory = None,
     debug: bool = True,
     repositories: list = None,
-    skip_indexing: bool = False 
+    skip_indexing: bool = False,
+    collection_name: str = None
 ) -> dict:
     """Main entry point to run the RAG pipeline."""
     try:
@@ -172,27 +170,59 @@ def run_rag_pipeline(
             retriever = Retriever()
         api_config = MockApiConfig()
 
-    if not repo_identifier:
-        raise ValueError("Repository identifier is required")
-    if not (repo_identifier.startswith("http://") or repo_identifier.startswith("https://")):
-        repo_identifier = os.path.abspath(os.path.expanduser(repo_identifier))
-        if not os.path.exists(repo_identifier):
-            raise ValueError(f"Local directory does not exist: {repo_identifier}")
+    # Check if we have a valid repo_identifier or a valid collection_name
+    if not repo_identifier and not collection_name:
+        raise ValueError("Either repository_identifier or collection_name must be provided")
+    
+    # Only validate repo_identifier path if it's provided and we're not using a predefined collection
+    if repo_identifier and not (collection_name and skip_indexing):
+        if not (repo_identifier.startswith("http://") or repo_identifier.startswith("https://")):
+            repo_identifier = os.path.abspath(os.path.expanduser(repo_identifier))
+            if not os.path.exists(repo_identifier):
+                raise ValueError(f"Local directory does not exist: {repo_identifier}")
+                
     if repositories:
         repositories = [os.path.abspath(os.path.expanduser(r)) if not (r.startswith("http://") or r.startswith("https://")) else r for r in repositories]
     
-    print(f"Processing query for repository: {repo_identifier}")
+    print(f"Processing query with {collection_name if collection_name else repo_identifier}")
     start_time = time.time()
     default_top_k = api_config.retriever.top_k
     collection_exists = False
-    collection_name = generate_collection_name(repo_identifier)
+    
+    # Use provided collection_name if available, otherwise generate it
+    if collection_name is None and repo_identifier:
+        collection_name = generate_collection_name(repo_identifier)
+    elif collection_name:
+        print(f"Using explicitly provided collection name: {collection_name}")
 
     if skip_indexing:
         persistent_dir = get_persistent_dir()
         try:
             client = chromadb.PersistentClient(path=persistent_dir)
-            collections = client.list_collections()
-            collection_exists = any(c.name == collection_name for c in collections)
+            
+            # Try to directly access the collection first (most reliable)
+            try:
+                client.get_collection(collection_name)
+                collection_exists = True
+                print(f"Verified collection '{collection_name}' exists via direct access.")
+            except Exception as direct_e:
+                if "does not exist" in str(direct_e):
+                    collection_exists = False
+                else:
+                    # Fall back to listing collections
+                    try:
+                        collections = client.list_collections()
+                        # Handle different versions of ChromaDB
+                        try:
+                            # For ChromaDB <0.6.0
+                            collection_exists = any(c.name == collection_name for c in collections)
+                        except AttributeError:
+                            # For ChromaDB >=0.6.0
+                            collection_exists = collection_name in collections
+                    except Exception as list_e:
+                        print(f"Error listing collections: {list_e}")
+                        collection_exists = False
+            
             if collection_exists:
                 print(f"Collection '{collection_name}' exists. Skipping indexing.")
             else:
@@ -203,12 +233,17 @@ def run_rag_pipeline(
             skip_indexing = False
 
     initial_state_dict = {
-        "repo_identifier": repo_identifier,
         "query": query,
         "top_k": top_k or default_top_k,
         "use_ollama": generator_provider == "ollama", # For the generator node
         "embedding_provider": embedding_provider,
+        "collection_name": collection_name  # Always include collection_name in state
     }
+    
+    # Only add repo_identifier to state if it was provided
+    if repo_identifier:
+        initial_state_dict["repo_identifier"] = repo_identifier
+        
     if memory: initial_state_dict["memory"] = memory
     if repositories: initial_state_dict["repositories"] = repositories
     
@@ -259,6 +294,7 @@ def run_rag_pipeline(
                 "chunk_count": len(final_state.get("chunks", [])) if "chunks" in final_state else None,
                 "multi_repo_mode": bool(repositories),
                 "skipped_indexing": skip_indexing and collection_exists,
+                "vectors_only": repo_identifier is None and collection_name is not None
             }
         }
         errors = {k: v for k, v in final_state.items() if k.startswith("error_")}

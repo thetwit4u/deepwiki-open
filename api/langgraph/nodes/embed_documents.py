@@ -8,14 +8,14 @@ def embed_documents_node(state: RAGState) -> RAGState:
     Embeds all chunks using the specified embedding provider (OpenAI or Ollama Nomic).
     Expects:
     - state['chunks']: List of chunks to embed.
-    - state['embedding_provider']: 'openai' or 'ollama_nomic'. Defaults to 'openai'.
+    - state['embedding_provider']: 'openai' or 'ollama_nomic'. Defaults to 'ollama_nomic'.
     Stores embeddings in state['embeddings'] and updates chunk metadata.
     """
     chunks = state.get('chunks', [])
     if not chunks:
         raise ValueError("No chunks found in state for embedding.")
 
-    embedding_provider = state.get('embedding_provider', 'openai') # Default to openai
+    embedding_provider = state.get('embedding_provider', 'ollama_nomic') # Default to ollama_nomic
     
     try:
         from api.langgraph_config import config as api_config

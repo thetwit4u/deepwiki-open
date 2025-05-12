@@ -10,6 +10,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 import google.generativeai as genai
 from api.langgraph.graph import run_rag_pipeline
+from api.langgraph.chat import get_chat_response, Message
 from api.langgraph.wiki_structure import get_wiki_structure, generate_section_content, get_repo_data_dir, update_progress_file
 from starlette.status import HTTP_404_NOT_FOUND
 import shutil
@@ -277,19 +278,37 @@ def find_wiki_directory(repo_url: str):
     """
     import os
     import glob
+    import re
     from api.langgraph.wiki_structure import get_wiki_data_dir, normalize_repo_id
     
     print(f"[DEBUG find_wiki_directory] Looking for wiki directory for '{repo_url}'")
     
-    # Try the new direct path first
-    wikis_dir = os.path.join(get_wiki_data_dir(), "wikis")
-    new_id = normalize_repo_id(repo_url)
-    direct_wiki_path = os.path.join(wikis_dir, new_id)
+    # Normalize the repository ID using our consistent approach
+    normalized_repo_id = normalize_repo_id(repo_url)
+    print(f"[DEBUG find_wiki_directory] Normalized repository ID: '{normalized_repo_id}'")
     
-    print(f"[DEBUG find_wiki_directory] Checking direct path: '{direct_wiki_path}'")
-    if os.path.isdir(direct_wiki_path):
-        print(f"[DEBUG find_wiki_directory] Found wiki at new format path: '{direct_wiki_path}'")
-        return direct_wiki_path, False
+    # Create variations for backward compatibility
+    repo_url_variations = [
+        normalized_repo_id,               # Consistently normalized ID (preferred)
+        repo_url,                         # Original URL/path
+        repo_url.replace('.', '_'),       # For backward compatibility
+        repo_url.replace('-', '_'),       # For backward compatibility
+        re.sub(r'[^\w]', '_', repo_url),  # Replace all non-word chars with underscore
+        re.sub(r'[^a-zA-Z0-9]', '_', repo_url) # Replace all non-alphanumeric with underscore
+    ]
+    # Remove duplicates
+    repo_url_variations = list(dict.fromkeys(repo_url_variations))
+    
+    wikis_dir = os.path.join(get_wiki_data_dir(), "wikis")
+    
+    # Try all variations
+    for variation in repo_url_variations:
+        direct_wiki_path = os.path.join(wikis_dir, variation)
+        
+        print(f"[DEBUG find_wiki_directory] Checking path for variation: '{variation}'")
+        if os.path.isdir(direct_wiki_path):
+            print(f"[DEBUG find_wiki_directory] Found wiki at path: '{direct_wiki_path}'")
+            return direct_wiki_path, False
     
     # Try direct match with the literal repo_url as directory name
     literal_path = os.path.join(wikis_dir, repo_url)
@@ -314,7 +333,8 @@ def find_wiki_directory(repo_url: str):
     
     # Also check for an exact match with the repo_url as prefix
     if repo_url and not repo_url.startswith('/'):
-        alt_glob_pattern = os.path.join(wikis_dir, f"{repo_url}_*")
+        # Try normalized variation for legacy format
+        alt_glob_pattern = os.path.join(wikis_dir, f"{normalized_repo_id}_*")
         print(f"[DEBUG find_wiki_directory] Checking alternative glob pattern: '{alt_glob_pattern}'")
         alt_potential_dirs = glob.glob(alt_glob_pattern)
         potential_dirs.extend(alt_potential_dirs)
@@ -345,9 +365,28 @@ async def wiki_progress(repo_url: str = Query(..., description="Repository URL o
     Return the progress.json for a given repo. Non-blocking implementation that returns the latest progress data.
     """
     import os
-    from api.langgraph.wiki_structure import get_wiki_data_dir
+    import time
+    from api.langgraph.wiki_structure import get_wiki_data_dir, normalize_repo_id
     
     print(f"[DEBUG wiki_progress] Request params: repo_url={repo_url}")
+    
+    # First check if there's a repository that matches in repos directory
+    # This can provide a quick answer even before the wiki directory is created
+    repo_id = normalize_repo_id(repo_url)
+    repos_dir = os.path.join(get_wiki_data_dir(), "repos")
+    repo_path = os.path.join(repos_dir, repo_id)
+    
+    # If repo is being copied/cloned, return a processing status
+    if os.path.exists(repos_dir) and not os.path.exists(repo_path):
+        # Check if there's a .tmp or .part file in the repos directory for this repo
+        for entry in os.listdir(repos_dir):
+            if entry.startswith(repo_id) and (entry.endswith(".tmp") or entry.endswith(".part") or entry.endswith(".git")):
+                return {
+                    "status": "cloning/copying",
+                    "log": [f"Repository {repo_url} is currently being cloned or copied."],
+                    "repo_id": repo_id,
+                    "progress": 10
+                }
     
     # Find the correct wiki directory (handles both new and legacy formats)
     repo_dir, is_legacy = find_wiki_directory(repo_url)
@@ -366,7 +405,7 @@ async def wiki_progress(repo_url: str = Query(..., description="Repository URL o
             import time
             import json
             
-            def read_file_nonblocking(file_path, max_retries=1, retry_delay=0.01):
+            def read_file_nonblocking(file_path, max_retries=3, retry_delay=0.05):
                 """Attempt to read a file without blocking, using non-blocking file locking."""
                 for attempt in range(max_retries):
                     try:
@@ -378,7 +417,14 @@ async def wiki_progress(repo_url: str = Query(..., description="Repository URL o
                                 fcntl.flock(f, fcntl.LOCK_UN)
                                 return data
                             except IOError:
-                                # File is locked, immediately return a processing status
+                                # File is locked, try a simple read instead
+                                try:
+                                    f.seek(0)
+                                    return f.read()
+                                except:
+                                    pass
+                                
+                                # Still couldn't read, immediately return a processing status
                                 return None
                     except Exception as e:
                         if attempt < max_retries - 1:
@@ -392,6 +438,16 @@ async def wiki_progress(repo_url: str = Query(..., description="Repository URL o
             if file_content is not None:
                 try:
                     progress_data = json.loads(file_content)
+                    
+                    # Check file modification time to detect stuck processes
+                    file_mtime = os.path.getmtime(progress_path)
+                    current_time = time.time()
+                    time_since_update = current_time - file_mtime
+                    
+                    # If file hasn't been updated in 5 minutes and status is not 'done' or 'error',
+                    # report a potential timeout
+                    if time_since_update > 300 and progress_data.get("status") not in ["done", "error", "not_started"]:
+                        progress_data["warning"] = f"Process may be stuck - no updates for {int(time_since_update/60)} minutes"
                     
                     # Validate the status against reality
                     if progress_data.get("status") == "not_started" and has_actual_pages:
@@ -409,13 +465,39 @@ async def wiki_progress(repo_url: str = Query(..., description="Repository URL o
                     if has_actual_pages:
                         return {"status": "done", "log": ["Wiki content exists but progress file is corrupted"], "auto_detected": True}
                     else:
-                        return {"status": "error", "log": ["Progress file is corrupted"], "error": "Progress file is being updated or corrupted"}
+                        current_size = os.path.getsize(progress_path)
+                        last_modified = os.path.getmtime(progress_path)
+                        time_since_update = time.time() - last_modified
+                        return {
+                            "status": "processing",
+                            "log": ["Processing repository... Progress file is being updated."],
+                            "error": f"Progress file is being updated or corrupted (size: {current_size} bytes, last modified: {int(time_since_update)} seconds ago)",
+                            "progress": 30 # Rough estimate
+                        }
             
             # If non-blocking read failed (file is locked), check reality
             if has_actual_pages:
                 return {"status": "done", "log": ["Wiki content exists"], "auto_detected": True}
             else:
-                return {"status": "processing", "log": ["Processing repository..."], "error": "Progress file is currently locked"}
+                # Check if file is being actively updated
+                current_size = os.path.getsize(progress_path)
+                last_modified = os.path.getmtime(progress_path)
+                time_since_update = time.time() - last_modified
+                
+                if time_since_update < 60:  # Updated in the last minute
+                    return {
+                        "status": "processing",
+                        "log": ["Repository being processed. Progress file is currently locked."],
+                        "progress": 40,  # Rough estimate
+                        "last_updated": int(time_since_update)
+                    }
+                else:
+                    return {
+                        "status": "processing",
+                        "log": [f"Repository is being processed. No updates in {int(time_since_update/60)} minutes."],
+                        "warning": "Process may be stuck - no updates for a while",
+                        "progress": 50  # Rough estimate
+                    }
             
         except Exception as e:
             # Check reality first
@@ -423,7 +505,18 @@ async def wiki_progress(repo_url: str = Query(..., description="Repository URL o
                 return {"status": "done", "log": ["Wiki content exists"], "auto_detected": True, "error": f"Could not read progress file: {str(e)}"}
             else:
                 # Return simple progress if file is being written to or corrupted
-                return {"status": "error", "log": ["Processing repository..."], "error": f"Could not read progress file: {str(e)}"}
+                return {"status": "processing", "log": ["Processing repository..."], "error": f"Could not read progress file: {str(e)}"}
+    
+    # If the repository directory exists but no progress file yet, it's likely being processed
+    if os.path.exists(repo_path):
+        time_created = os.path.getctime(repo_path)
+        time_since_creation = time.time() - time_created
+        if time_since_creation < 60:  # Created in the last minute
+            return {
+                "status": "starting",
+                "log": ["Repository has been cloned/copied and processing is about to begin."],
+                "progress": 15
+            }
     
     # If no progress file exists yet
     if has_actual_pages:
@@ -708,7 +801,25 @@ async def start_wiki_generation(
                         update_progress_file(progress_path, progress)
                         return progress
                 else:
-                    shutil.copytree(repo_url, repo_dest)
+                    # Check if the repo_url is a valid directory path
+                    if os.path.isdir(repo_url):
+                        try:
+                            shutil.copytree(repo_url, repo_dest)
+                        except Exception as e:
+                            progress["status"] = "error"
+                            progress["log"].append(f"Error copying repository: {e}")
+                            update_progress_file(progress_path, progress)
+                            return progress
+                    else:
+                        # Handle case where repo_url is just an identifier and not a valid path
+                        progress["status"] = "vectors_only"
+                        progress["log"].append(f"Repository path '{repo_url}' is not a valid directory. Creating empty directory for vectors-only operation.")
+                        # Create an empty directory to store just the vector data
+                        os.makedirs(repo_dest, exist_ok=True)
+                        # Create a README in the empty repo directory
+                        with open(os.path.join(repo_dest, "README.md"), "w") as f:
+                            f.write(f"# {repo_id}\n\nThis is a placeholder for vector data only. No repository files are available.")
+                        update_progress_file(progress_path, progress)
             # --- Clean up ChromaDB collection before reindexing ---
             collection_name = generate_collection_name(repo_dest)
             client = get_chroma_client()
@@ -841,7 +952,14 @@ async def start_wiki_generation(
     if background_tasks is not None:
         background_tasks.add_task(pipeline)
     else:
-        pipeline()
+        # Create a background task even if not provided by the caller
+        # This ensures we never block the request
+        from fastapi import BackgroundTasks
+        bg_tasks = BackgroundTasks()
+        bg_tasks.add_task(pipeline)
+        # Start the task (will run in background)
+        import asyncio
+        asyncio.create_task(bg_tasks())
         
     return {
         "status": "started", 
@@ -984,7 +1102,20 @@ async def regenerate_wiki(
             "message": "Wiki regeneration started in the background. Check progress at /wiki-progress endpoint."
         }
     else:
-        return regenerate_pipeline()
+        # Create a background task even if not provided by the caller
+        # This ensures we never block the request
+        from fastapi import BackgroundTasks
+        bg_tasks = BackgroundTasks()
+        bg_tasks.add_task(regenerate_pipeline)
+        # Start the task (will run in background)
+        import asyncio
+        asyncio.create_task(bg_tasks())
+        
+        return {
+            "status": "started", 
+            "repo_id": repo_id, 
+            "message": "Wiki regeneration started in the background. Check progress at /wiki-progress endpoint."
+        }
 
 @app.post("/reset-wiki-status")
 async def reset_wiki_status(
@@ -1041,6 +1172,77 @@ class FixMermaidRequest(BaseModel):
 
 class FixMermaidResponse(BaseModel):
     fixed_diagram: str = Field(..., description="The corrected Mermaid diagram code")
+    changes_made: List[str] = Field(default_factory=list, description="List of changes made to the diagram")
+
+def identify_diagram_changes(original: str, fixed: str) -> List[str]:
+    """
+    Identify the changes made between the original and fixed diagram.
+    
+    Returns a list of human-readable change descriptions.
+    """
+    changes = []
+    
+    # Remove any trailing/leading whitespace for comparisons
+    original = original.strip()
+    fixed = fixed.strip()
+    
+    if original == fixed:
+        return ["No changes were necessary"]
+    
+    # Check for quoting issues in node labels
+    orig_labels = re.findall(r'([A-Za-z0-9_]+)\[([^\]]+)\]', original)
+    fixed_labels = re.findall(r'([A-Za-z0-9_]+)\["([^"]+)"\]', fixed)
+    
+    # Find labels that were quoted in the fixed version
+    for node, label in orig_labels:
+        if ' ' in label:
+            found = False
+            for f_node, f_label in fixed_labels:
+                if node == f_node and label == f_label:
+                    found = True
+                    changes.append(f"Added quotes around node {node} label: '{label}'")
+                    break
+            if not found and f"[{label}]" in original and f'["{label}"]' in fixed:
+                changes.append(f"Added quotes around node label: '{label}'")
+    
+    # Check for graph direction changes
+    orig_dir = re.search(r'graph\s+([A-Z][A-Z])', original)
+    fixed_dir = re.search(r'graph\s+([A-Z][A-Z])', fixed)
+    
+    if orig_dir and fixed_dir and orig_dir.group(1) != fixed_dir.group(1):
+        changes.append(f"Changed graph direction from '{orig_dir.group(1)}' to '{fixed_dir.group(1)}'")
+    
+    # Check for subgraph syntax fixes
+    orig_subgraphs = len(re.findall(r'subgraph\s+', original))
+    fixed_subgraphs = len(re.findall(r'subgraph\s+', fixed))
+    
+    if orig_subgraphs != fixed_subgraphs:
+        changes.append(f"Fixed subgraph syntax (had {orig_subgraphs}, now {fixed_subgraphs})")
+    
+    # Check for connection syntax changes
+    orig_connections = re.findall(r'-->', original)
+    fixed_connections = re.findall(r'-->', fixed)
+    
+    if len(orig_connections) != len(fixed_connections):
+        changes.append(f"Fixed connection arrows (had {len(orig_connections)}, now {len(fixed_connections)})")
+    
+    # Check for removed invalid lines
+    orig_lines = [line.strip() for line in original.split('\n') if line.strip()]
+    fixed_lines = [line.strip() for line in fixed.split('\n') if line.strip()]
+    
+    if len(orig_lines) > len(fixed_lines):
+        changes.append(f"Removed {len(orig_lines) - len(fixed_lines)} invalid or comment lines")
+    
+    # If we couldn't identify specific changes, provide a general message
+    if not changes:
+        if len(fixed) > len(original):
+            changes.append("Added missing syntax elements")
+        elif len(fixed) < len(original):
+            changes.append("Removed invalid syntax elements")
+        else:
+            changes.append("Fixed syntax errors while maintaining diagram structure")
+    
+    return changes
 
 @app.post("/fix-mermaid", response_model=FixMermaidResponse)
 async def fix_mermaid(request: FixMermaidRequest = Body(...)):
@@ -1123,7 +1325,13 @@ Return ONLY the corrected Mermaid diagram code without any explanation, markdown
         fixed_diagram = re.sub(r'```\s*$', '', fixed_diagram)
         fixed_diagram = fixed_diagram.strip()
         
-        return {"fixed_diagram": fixed_diagram}
+        # Identify the changes made to the diagram
+        changes_made = identify_diagram_changes(diagram, fixed_diagram)
+        
+        return {
+            "fixed_diagram": fixed_diagram,
+            "changes_made": changes_made
+        }
         
     except Exception as e:
         logger.error(f"Error fixing Mermaid diagram: {str(e)}")
@@ -1144,84 +1352,7 @@ async def fix_mermaid_with_api_prefix(request: FixMermaidRequest = Body(...)):
     Returns:
         The corrected Mermaid diagram code
     """
-    try:
-        # Import here to ensure re module is available in this function scope
-        import re  # Ensure re module is available locally
-        
-        diagram = request.diagram
-        error_message = request.error
-        attempt = request.attempt
-        
-        if not diagram or not error_message:
-            raise HTTPException(status_code=400, detail="Missing diagram or error message")
-        
-        # Import the LLM components
-        try:
-            from langchain_google_genai import ChatGoogleGenerativeAI
-        except ImportError:
-            from langchain.chat_models import ChatGoogleGenerativeAI
-            
-        # Use the same LLM infrastructure as the rest of the app
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash-preview-04-17",
-            temperature=0.2,  # Lower temperature for more deterministic fixes
-            top_p=0.8,
-            top_k=40
-        )
-        
-        # Create prompt with context about the error
-        prompt = f"""
-You are an expert in Mermaid diagram syntax. A user has a Mermaid diagram with errors that needs fixing.
-
-DIAGRAM WITH ERRORS:
-```mermaid
-{diagram}
-```
-
-ERROR MESSAGE:
-{error_message}
-
-This is attempt #{attempt} to fix the diagram.
-
-Common Mermaid diagram issues include:
-1. Unquoted node labels containing spaces (should be in double quotes: A["Label with spaces"])
-2. Invalid connections between nodes
-3. Syntax errors in graph direction (should be TD, LR, etc.)
-4. Missing or mismatched quotes
-5. Non-diagram text or explanations inside the diagram (should be removed)
-6. Mismatched subgraph declarations
-7. Invalid special characters in node IDs or labels
-8. Incorrect styling syntax
-
-Your task:
-1. Carefully analyze the diagram and error message
-2. Fix ONLY the specific syntax errors while preserving the diagram's meaning and structure
-3. Return ONLY the fixed diagram code, without any explanations or markdown fences
-4. If the error involves unquoted labels with spaces, add double quotes around all labels with spaces
-5. Remove any non-diagram text, comments, or explanations from inside the diagram
-
-Return ONLY the corrected Mermaid diagram code without any explanation, markdown fence, or any other text.
-"""
-        
-        from langchain_core.prompts import ChatPromptTemplate
-        from langchain_core.output_parsers import StrOutputParser
-        
-        # Create the chain
-        chain = ChatPromptTemplate.from_messages([("user", prompt)]) | llm | StrOutputParser()
-        
-        # Execute the chain
-        fixed_diagram = chain.invoke({})
-        
-        # Clean up the response - remove any markdown code fences if the LLM added them
-        fixed_diagram = re.sub(r'```mermaid\s*\n', '', fixed_diagram)
-        fixed_diagram = re.sub(r'```\s*$', '', fixed_diagram)
-        fixed_diagram = fixed_diagram.strip()
-        
-        return {"fixed_diagram": fixed_diagram}
-        
-    except Exception as e:
-        logger.error(f"Error fixing Mermaid diagram: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error fixing Mermaid diagram: {str(e)}")
+    return await fix_mermaid(request)
 
 # Add endpoint to update wiki section content
 class UpdateSectionContentRequest(BaseModel):
@@ -1245,19 +1376,84 @@ async def update_section_content(request: UpdateSectionContentRequest = Body(...
         import os
         import yaml
         import re
+        import json
         
         print(f"[DEBUG update_section_content] Request to update section {request.section_id} for repo {request.repo_url}")
         
         # Find the wiki directory
         repo_dir, is_legacy = find_wiki_directory(request.repo_url)
         
-        # Construct the path to the markdown file
-        md_path = os.path.join(repo_dir, "pages", f"{request.section_id}.md")
-        print(f"[DEBUG update_section_content] Looking for markdown file at: {md_path}")
+        # For backward compatibility with string IDs
+        original_section_id = request.section_id
         
-        if not os.path.exists(md_path):
-            print(f"[DEBUG update_section_content] File not found: {md_path}")
-            raise HTTPException(status_code=404, detail="Section file not found")
+        # First try to see if the section_id is a numeric ID (used in some wiki structures)
+        numeric_id = None
+        if request.section_id.isdigit():
+            numeric_id = request.section_id
+        elif request.section_id == "build-test-deploy" or request.section_id == "building-testing-deployment":
+            # Special case handling for common mismatch
+            numeric_id = "6"  # This is typically the ID for the Building, Testing, and Deployment section
+        
+        # Check structure.json to verify or find the correct numeric ID
+        structure_path = os.path.join(repo_dir, "structure.json")
+        if os.path.exists(structure_path):
+            with open(structure_path, 'r') as f:
+                structure = json.load(f)
+            
+            # Check if we're looking for a title-based match
+            if not numeric_id:
+                for section in structure.get("sections", []):
+                    # Convert section title to a slug-like format for comparison
+                    if "title" in section:
+                        title_slug = section["title"].lower().replace(" ", "-").replace("/", "-").replace("&", "and")
+                        if title_slug == request.section_id.lower() or request.section_id.lower() in title_slug:
+                            numeric_id = str(section.get("id"))
+                            print(f"[DEBUG update_section_content] Matched section '{request.section_id}' to section ID {numeric_id} by title")
+                            break
+        
+        # Try paths with the numeric ID first if we found one
+        md_path = None
+        if numeric_id:
+            print(f"[DEBUG update_section_content] Trying with numeric ID: {numeric_id}")
+            md_path = os.path.join(repo_dir, "pages", f"{numeric_id}.md")
+            if os.path.exists(md_path):
+                print(f"[DEBUG update_section_content] Found file with numeric ID: {md_path}")
+            else:
+                print(f"[DEBUG update_section_content] File not found with numeric ID: {md_path}")
+                md_path = None
+        
+        # If we didn't find it with numeric ID, try the original string ID
+        if not md_path:
+            md_path = os.path.join(repo_dir, "pages", f"{original_section_id}.md")
+            if os.path.exists(md_path):
+                print(f"[DEBUG update_section_content] Found file with original ID: {md_path}")
+            else:
+                print(f"[DEBUG update_section_content] File not found with original ID: {md_path}")
+                
+                # Try a few more common patterns
+                patterns = [
+                    f"{request.section_id.replace('-', '_')}.md",
+                    f"{request.section_id.replace('_', '-')}.md"
+                ]
+                for pattern in patterns:
+                    test_path = os.path.join(repo_dir, "pages", pattern)
+                    if os.path.exists(test_path):
+                        md_path = test_path
+                        print(f"[DEBUG update_section_content] Found file with pattern: {pattern}")
+                        break
+                
+                # If still not found, list all MD files in pages directory
+                if not os.path.exists(md_path):
+                    pages_dir = os.path.join(repo_dir, "pages")
+                    if os.path.exists(pages_dir):
+                        print(f"[DEBUG update_section_content] Listing all MD files in pages directory:")
+                        for filename in os.listdir(pages_dir):
+                            if filename.endswith(".md"):
+                                print(f"[DEBUG update_section_content]   - {filename}")
+        
+        if not md_path or not os.path.exists(md_path):
+            print(f"[DEBUG update_section_content] File not found after all attempts")
+            raise HTTPException(status_code=404, detail=f"Section file not found for '{request.section_id}'. Available section IDs are numeric (1-8).")
         
         # Read the existing file to extract frontmatter
         with open(md_path, 'r', encoding='utf-8') as f:
@@ -1296,12 +1492,14 @@ async def update_section_content(request: UpdateSectionContentRequest = Body(...
         with open(md_path, 'w', encoding='utf-8') as f:
             f.write(new_content)
         
-        print(f"[DEBUG update_section_content] Successfully updated section {request.section_id}")
+        actual_section_id = os.path.basename(md_path).replace(".md", "")
+        print(f"[DEBUG update_section_content] Successfully updated section file {actual_section_id} (originally requested: {request.section_id})")
         
         return {
             "status": "success",
-            "message": f"Section {request.section_id} updated successfully",
-            "last_updated": metadata["last_updated"]
+            "message": f"Section {actual_section_id} updated successfully (original request: {request.section_id})",
+            "last_updated": metadata["last_updated"],
+            "file_path": md_path
         }
         
     except Exception as e:
@@ -1325,3 +1523,75 @@ async def update_section_content_with_api_prefix(request: UpdateSectionContentRe
         Status message indicating success or failure
     """
     return await update_section_content(request)
+
+class ChatRequest(BaseModel):
+    """Model for chat request."""
+    repo_id: str = Field(..., description="Repository ID")
+    message: str = Field(..., description="User message")
+    generator_provider: Optional[str] = Field("gemini", description="Generator model provider (gemini, openai, ollama)")
+    embedding_provider: Optional[str] = Field("ollama_nomic", description="Embedding model provider (openai, ollama_nomic)")
+    top_k: Optional[int] = Field(10, description="Number of documents to retrieve")
+
+class ChatResponse(BaseModel):
+    """Model for chat response."""
+    answer: str
+    metadata: Dict[str, Any]
+    retrieved_documents: Optional[List[Dict[str, Any]]] = None
+    error: Optional[str] = None
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat(request: ChatRequest = Body(...)):
+    """
+    Process a chat message and return a response based on repository content.
+    
+    Args:
+        request: ChatRequest with repo_id, message, and optional parameters
+        
+    Returns:
+        ChatResponse with answer and metadata
+    """
+    try:
+        logging.info(f"Processing chat request for repo: {request.repo_id}")
+        
+        response = get_chat_response(
+            repo_id=request.repo_id,
+            query=request.message,
+            generator_provider=request.generator_provider,
+            embedding_provider=request.embedding_provider,
+            top_k=request.top_k
+        )
+        
+        return response
+    except Exception as e:
+        error_msg = f"Error processing chat: {str(e)}"
+        logging.error(error_msg)
+        return {
+            "answer": "An error occurred while processing your request. Please try again.",
+            "metadata": {"error": str(e)},
+            "error": str(e)
+        }
+
+@app.get("/chat/history")
+async def get_chat_history(repo_id: str = Query(..., description="Repository ID")):
+    """
+    Get chat history for a repository.
+    
+    Args:
+        repo_id: Repository ID
+        
+    Returns:
+        List of chat messages
+    """
+    try:
+        from api.langgraph.chat import get_or_create_chat_history
+        
+        history = get_or_create_chat_history(repo_id)
+        return {
+            "messages": [msg.model_dump() for msg in history.messages],
+            "repo_id": repo_id,
+            "last_updated": history.last_updated.isoformat()
+        }
+    except Exception as e:
+        error_msg = f"Error retrieving chat history: {str(e)}"
+        logging.error(error_msg)
+        raise HTTPException(status_code=500, detail=error_msg)

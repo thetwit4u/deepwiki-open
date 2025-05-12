@@ -11,3 +11,5 @@ alwaysApply: true
 ### ✅ Task Completion
 - **Mark completed tasks in `TASKS.md`** immediately after finishing them.
 - Add new sub-tasks or TODOs discovered during development to `TASKS.md` under a “Discovered During Work” section.
+
+ALWAYS MAKE SURE TO VERIFY IF THERE IS AN EXSITING PATTERN IN THE CURRENT REPOSITORY AND VOID DUPICATION OF CODE OR FUNCTIONALITY

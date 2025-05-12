@@ -1,104 +1,213 @@
-from api.langgraph.state import RAGState
+"""
+Generation node for the RAG pipeline.
 
-def generate_node(state: RAGState) -> RAGState:
+Inputs from state:
+- state['query']: User query
+- state['relevant_documents']: The documents retrieved from ChromaDB
+
+Outputs added to state:
+- state['answer']: The generated answer
+"""
+import os
+import sys
+import traceback
+from pathlib import Path
+from typing import Optional, List, Dict, Any
+from langchain_core.documents import Document
+
+def format_documents(docs: List[Document]) -> str:
+    """Format a list of documents into a string."""
+    return "\n\n".join([
+        f"DOCUMENT [{i+1}] (Source: {doc.metadata.get('source', 'Unknown')})\n"
+        f"{doc.page_content}"
+        for i, doc in enumerate(docs)
+    ])
+
+def format_chat_history(chat_history: Optional[List[Dict[str, str]]]) -> str:
+    """Format chat history into a string for the prompt."""
+    if not chat_history:
+        return ""
+    
+    formatted_history = []
+    for message in chat_history:
+        role = "User" if message["role"] == "user" else "Assistant"
+        formatted_history.append(f"{role}: {message['content']}")
+    
+    return "\n\n".join(formatted_history)
+
+def generate_prompt(query: str, docs: List[Document], chat_history: Optional[List[Dict[str, str]]] = None) -> str:
     """
-    Generates an answer using Gemini LLM based on the retrieved documents.
-    Expects:
-    - state['query']: The user query
-    - state['relevant_documents']: The documents retrieved from ChromaDB
-    - state['history']: Optional conversation history
-    - state['use_ollama']: Optional boolean to use Ollama instead of Gemini/OpenAI
+    Generate a prompt for the LLM.
+    
+    Args:
+        query: User query (may already contain a formatted prompt)
+        docs: Retrieved documents
+        chat_history: Optional chat history
+        
     Returns:
-    - state['answer']: The generated answer
+        Formatted prompt string
     """
-    from langchain_core.prompts import ChatPromptTemplate
-    from langchain_core.output_parsers import StrOutputParser
-    from langchain_google_genai import ChatGoogleGenerativeAI
-    try:
-        from api.langgraph_config import config
-    except ImportError:
-        from dataclasses import dataclass
-        @dataclass
-        class MinimalConfig:
-            class Generator:
-                model = "gemini-2.5-flash-preview-04-17"
-                temperature = 0.7
-                top_p = 0.8
-            class GeneratorOllama:
-                model = "qwen3:1.7b"
-                temperature = 0.7
-                top_p = 0.8
-            generator = Generator()
-            generator_ollama = GeneratorOllama()
-        config = MinimalConfig()
-    query = state.get('query')
-    relevant_documents = state.get('relevant_documents', [])
-    history = state.get('history', [])
-    use_ollama = state.get('use_ollama', False)
-    if not query:
-        raise ValueError("No 'query' provided in state for generation.")
-    MAX_CONTEXT_TOKENS = 900_000
-    context_pieces = []
-    total_tokens = 0
-    truncated = False
-    if not relevant_documents:
-        context_text = "No specific code context found."
+    # Check if the query already contains a detailed prompt (from the chat module)
+    if "USER QUERY:" in query and "CONVERSATION HISTORY:" in query:
+        # The query already contains a formatted prompt, just append the documents
+        documents_str = format_documents(docs)
+        return f"{query}\n\nRELEVANT DOCUMENTS:\n{documents_str}"
+    
+    # Otherwise, create a prompt from scratch
+    formatted_docs = format_documents(docs)
+    formatted_history = format_chat_history(chat_history) if chat_history else ""
+    
+    # Create different prompts based on whether we have chat history
+    if formatted_history:
+        return f"""You are an expert software developer and technical assistant.
+        
+CHAT HISTORY:
+{formatted_history}
+
+USER QUERY: {query}
+
+Use the following documents to provide a detailed, accurate answer to the query.
+
+RELEVANT DOCUMENTS:
+{formatted_docs}
+
+Based on the documents provided, respond to the user's query with accurate, technical information.
+If the documents don't contain sufficient information to answer the query, acknowledge this limitation.
+"""
     else:
-        for i, doc in enumerate(relevant_documents):
-            file_path = doc.metadata.get('file_path', 'Unknown file')
-            repo_name = doc.metadata.get('repository', 'Current repository')
-            content = doc.page_content
-            est_tokens = len(content) // 4
-            if total_tokens + est_tokens > MAX_CONTEXT_TOKENS:
-                truncated = True
-                break
-            context_pieces.append(f"Document {i+1} from {file_path} in {repo_name}:\n{content}")
-            total_tokens += est_tokens
-        context_text = "\n\n".join(context_pieces)
-        if truncated:
-            print(f"[WARNING] Context truncated to ~{MAX_CONTEXT_TOKENS} tokens. Not all documents included.")
-    system_template = """You are an expert code analyst and software documentation assistant.\nAnswer the user's question based on the provided context from the codebase.\nIf the context doesn't contain the information needed, say so clearly rather than making up information.\nFor code-related questions, include relevant code snippets and explain them.\nFor architecture or design questions, provide clear and structured explanations.\nFormat your response using Markdown for readability.\n\nContext from the codebase:\n{context}\n"""
-    human_template = "{query}"
-    system_message = system_template.format(context=context_text)
+        return f"""You are an expert software developer and technical assistant.
+
+USER QUERY: {query}
+
+Use the following documents to provide a detailed, accurate answer to the query.
+
+RELEVANT DOCUMENTS:
+{formatted_docs}
+
+Based on the documents provided, respond to the user's query with accurate, technical information.
+If the documents don't contain sufficient information to answer the query, acknowledge this limitation.
+"""
+
+def generate_node(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Generate an answer based on the query and relevant documents."""
     try:
+        query = state.get("query", "")
+        relevant_docs = state.get("relevant_documents", [])
+        memory = state.get("memory", {})
+        chat_history = memory.get("chat_history", []) if memory else []
+        use_ollama = state.get("use_ollama", False)
+        
+        if not relevant_docs:
+            state["answer"] = "No relevant documents were found to answer your query."
+            return state
+        
+        # Create a prompt for the LLM
+        prompt = generate_prompt(query, relevant_docs, chat_history)
+        
+        # Use either Google's Gemini or OpenAI for generation
         if use_ollama:
-            try:
-                from langchain_community.llms.ollama import Ollama
-                print(f"Using Ollama model: {config.generator_ollama.model}")
-                import os
-                ollama_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-                llm = Ollama(
-                    model=config.generator_ollama.model,
-                    base_url=ollama_url,
-                    temperature=config.generator_ollama.temperature,
-                    top_p=config.generator_ollama.top_p,
-                )
-            except ImportError:
-                print("Warning: langchain_community.llms.ollama not available. Falling back to Gemini.")
-                use_ollama = False
-            except Exception as e:
-                print(f"Error initializing Ollama: {str(e)}. Falling back to Gemini.")
-                use_ollama = False
-        if not use_ollama:
-            print(f"Using Gemini model: {config.generator.model}")
-            llm = ChatGoogleGenerativeAI(
-                model=config.generator.model,
-                temperature=config.generator.temperature,
-                top_p=config.generator.top_p,
-            )
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", system_message),
-            ("human", human_template),
-        ])
-        chain = prompt | llm | StrOutputParser()
-        answer = chain.invoke({"query": query})
-        state['answer'] = answer
+            answer = generate_with_ollama(prompt)
+        else:
+            answer = generate_with_gemini(prompt)
+        
+        state["answer"] = answer
+        return state
+        
     except Exception as e:
-        error_msg = f"Error generating answer: {str(e)}"
-        print(error_msg)
-        state['answer'] = f"I couldn't generate a proper answer due to an error: {str(e)}"
-        state['error_generate'] = str(e)
-    return state
+        print(f"Error in generate_node: {e}")
+        traceback.print_exc()
+        state["answer"] = f"Error generating answer: {str(e)}"
+        state["error_generate"] = str(e)
+        return state
+
+def generate_with_gemini(prompt: str) -> str:
+    """Generate an answer using Google's Gemini model."""
+    import google.generativeai as genai
+    import os
+    
+    api_key = os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        return "Error: GOOGLE_API_KEY environment variable not set."
+    
+    genai.configure(api_key=api_key)
+    
+    try:
+        # Import here to access any config that may have been set up in the main script
+        from api.langgraph_config import config
+        model_name = config.generator.model
+        temperature = config.generator.temperature
+        top_p = config.generator.top_p
+        top_k = getattr(config.generator, "top_k", 32)
+    except ImportError:
+        # Default config if langgraph_config cannot be imported
+        model_name = "gemini-2.5-flash-preview-04-17"
+        temperature = 0.7
+        top_p = 0.8
+        top_k = 40
+    
+    model = genai.GenerativeModel(
+        model_name=model_name,
+        generation_config={
+            "temperature": temperature,
+            "top_p": top_p,
+            "top_k": top_k,
+            "max_output_tokens": 2048,
+        }
+    )
+    
+    try:
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        print(f"Error with Gemini generation: {e}")
+        # Try again with a simpler prompt
+        try:
+            fallback_prompt = f"Summarize the following information:\n\n{prompt}"
+            response = model.generate_content(fallback_prompt)
+            return response.text + "\n\nNote: This response was generated with a fallback prompt due to an error."
+        except Exception as fallback_error:
+            print(f"Error with fallback Gemini generation: {fallback_error}")
+            return f"Error generating content with Gemini: {str(e)}"
+
+def generate_with_ollama(prompt: str) -> str:
+    """Generate an answer using Ollama."""
+    import requests
+    
+    try:
+        # Import here to access any config that may have been set up in the main script
+        from api.langgraph_config import config
+        model_name = config.generator_ollama.model
+        temperature = config.generator_ollama.temperature
+        top_p = config.generator_ollama.top_p
+        top_k = getattr(config.generator_ollama, "top_k", 40)
+    except ImportError:
+        # Default config if langgraph_config cannot be imported
+        model_name = "qwen3:1.7b"
+        temperature = 0.7
+        top_p = 0.8
+        top_k = 40
+    
+    api_url = "http://localhost:11434/api/generate"
+    
+    try:
+        response = requests.post(
+            api_url,
+            json={
+                "model": model_name,
+                "prompt": prompt,
+                "temperature": temperature,
+                "top_p": top_p,
+                "top_k": top_k,
+                "max_tokens": 1024,
+                "stream": False
+            },
+            timeout=60  # 60 second timeout
+        )
+        response.raise_for_status()
+        return response.json().get("response", "No response received from Ollama")
+    except requests.exceptions.RequestException as e:
+        print(f"Error with Ollama generation: {e}")
+        return f"Error generating content with Ollama: {str(e)}"
 
 # Usage Example
 if __name__ == "__main__":
