@@ -61,19 +61,48 @@ class ChromaOllamaEmbeddingFunction:
         """Return the dimensionality of the embeddings"""
         return self._dimensionality
 
-def get_embedding_function(embedding_provider: str, api_config):
+def get_embedding_function(embedding_provider, api_config=None):
     """
-    Returns the appropriate embedding function instance based on the provider string and config.
+    Get embedding function based on provider.
+    
+    Args:
+        embedding_provider: The embedding provider (openai, ollama_nomic)
+        api_config: Optional API configuration object
+        
+    Returns:
+        Embedding function for the specified provider
     """
-    if embedding_provider == 'ollama_nomic':
-        ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-        return ChromaOllamaEmbeddingFunction(
-            model=api_config.embedder_ollama.model,
-            base_url=ollama_host
-        )
-    elif embedding_provider == 'openai':
-        return OpenAIEmbeddings(
-            model=api_config.embedder.model,
-            dimensions=api_config.embedder.dimensions if hasattr(api_config.embedder, 'dimensions') else None
-        )
-    raise ValueError(f"Unsupported embedding_provider: {embedding_provider}") 
+    if api_config is None:
+        # Use simple dictionaries instead of dataclasses to avoid mutable default issues
+        default_config = {
+            "openai": {
+                "model": "text-embedding-3-small",
+                "dimensions": 256
+            },
+            "ollama_nomic": {
+                "model": "nomic-embed-text",
+                "base_url": "http://localhost:11434"  # Default Ollama URL
+            }
+        }
+    else:
+        # Extract config from api_config object if provided
+        default_config = {
+            "openai": {
+                "model": getattr(api_config.embedder, "model", "text-embedding-3-small"),
+                "dimensions": getattr(api_config.embedder, "dimensions", 256)
+            },
+            "ollama_nomic": {
+                "model": getattr(api_config.embedder_ollama, "model", "nomic-embed-text"),
+                "base_url": getattr(api_config.embedder_ollama, "base_url", "http://localhost:11434")
+            }
+        }
+    
+    if embedding_provider == 'openai':
+        config = default_config["openai"]
+        from langchain_openai import OpenAIEmbeddings
+        return OpenAIEmbeddings(model=config["model"], dimensions=config["dimensions"])
+    elif embedding_provider == 'ollama_nomic':
+        config = default_config["ollama_nomic"]
+        return ChromaOllamaEmbeddingFunction(model=config["model"], base_url=config["base_url"])
+    else:
+        raise ValueError(f"Unsupported embedding provider: {embedding_provider}") 

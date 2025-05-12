@@ -3,7 +3,7 @@ Generation node for the RAG pipeline.
 
 Inputs from state:
 - state['query']: User query
-- state['relevant_documents']: The documents retrieved from ChromaDB
+- state['retrieved_documents']: The documents retrieved from ChromaDB
 
 Outputs added to state:
 - state['answer']: The generated answer
@@ -92,7 +92,7 @@ def generate_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Generate an answer based on the query and relevant documents."""
     try:
         query = state.get("query", "")
-        relevant_docs = state.get("relevant_documents", [])
+        relevant_docs = state.get("retrieved_documents", [])
         memory = state.get("memory", {})
         chat_history = memory.get("chat_history", []) if memory else []
         use_ollama = state.get("use_ollama", False)

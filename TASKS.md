@@ -160,20 +160,58 @@ Once Phase 1 is complete, we'll proceed to:
 - [x] Add special handling for directory structure rendering with fixed-width font and proper formatting (2024-08-05)
 - **[2023-05-04]** Improved directory structure rendering in frontend
 - **[2023-05-10]** Fixed collection name issue with customs_exchange_rate_main repository
+- [x] Fixed collection name issue with customs_exchange_rate_main repository (2024-05-10):
+  - Added collection_name parameter to API for direct ChromaDB collection access
+  - Updated frontend chat API route to support explicit collection names
+  - Created `check_collections.py` utility to find correct collection names
+  - Added URL parameter support via `/?repo=name&collection=collection_name`
+  - Updated ChatPanel component to use collection name when provided
+  - Added comprehensive documentation in CHAT_API_GUIDE.md
+  - [x] Fixed Document serialization issue causing 500 Internal Server Error (2024-08-08)
+  - [x] Improved collection name resolution (2024-08-08):
+    - Moved collection name resolution logic from frontend to backend
+    - Implemented automatic variation matching in get_chat_response
+    - Removed hardcoded collection mappings from frontend
+    - Made collection lookup seamless and transparent to clients
+  - [x] Fixed field name mismatch in RAG pipeline (2024-08-08):
+    - Updated generate_node to look for "retrieved_documents" instead of "relevant_documents"
+    - Ensured consistent naming across the RAG pipeline
+    - Fixed docstring in generate.py to reflect the correct field name
+- [x] Fix broken test_chat_customs.py and test_chat_api_endpoint.py to work with the new documentation database (2024-05-10)
 
 ## Tasks
 
 ### Completed
 - [x] Create test_wiki_embeddings.py to verify consistent use of ollama_nomic embeddings for wiki generation (2024-05-12)
 - [x] Add special handling for directory structure rendering with fixed-width font and proper formatting (2024-08-05)
-- [x] Fixed collection name issue with customs_exchange_rate_main repository (2024-05-10)
+- [x] Enhanced Mermaid diagram auto-fix functionality with improved error recovery (2024-05-20)
+- [x] Fixed collection name issue with customs_exchange_rate_main repository (2024-05-10):
+  - Added collection_name parameter to API for direct ChromaDB collection access
+  - Updated frontend chat API route to support explicit collection names
+  - Created `check_collections.py` utility to find correct collection names
+  - Added URL parameter support via `/?repo=name&collection=collection_name`
+  - Updated ChatPanel component to use collection name when provided
+  - Added comprehensive documentation in CHAT_API_GUIDE.md
+  - [x] Fixed Document serialization issue causing 500 Internal Server Error (2024-08-08)
+  - [x] Improved collection name resolution (2024-08-08):
+    - Moved collection name resolution logic from frontend to backend
+    - Implemented automatic variation matching in get_chat_response
+    - Removed hardcoded collection mappings from frontend
+    - Made collection lookup seamless and transparent to clients
+  - [x] Fixed field name mismatch in RAG pipeline (2024-08-08):
+    - Updated generate_node to look for "retrieved_documents" instead of "relevant_documents"
+    - Ensured consistent naming across the RAG pipeline
+    - Fixed docstring in generate.py to reflect the correct field name
+- [x] Fix broken test_chat_customs.py and test_chat_api_endpoint.py to work with the new documentation database (2024-05-10)
 
 ### In Progress
-- None
+- [ ] Refactor API endpoints to use standardized error handling
 
-### To Do
-- None
+### TODO
+- [ ] Improve embeddings service reliability by adding retry logic around ollama calls
+- [ ] Add support for code execution in notebook-style UI
+- [ ] Create user documentation for markdown+chat features
 
 ### Discovered During Work
 - The hash generation for collection names depends on the absolute path of the repository on disk, which can cause mismatches when accessing collections by repository ID alone.
-- Solution: Use the collection_name parameter explicitly with the exact name of the collection in ChromaDB. 
+- Solution: Use the collection_name parameter explicitly with the exact name of the collection in ChromaDB or add a hardcoded mapping in the frontend API. 

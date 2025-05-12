@@ -57,36 +57,71 @@ We identified and fixed the following issues related to the chat functionality u
 - Added fallback logic to create an empty placeholder repository when the identifier is not a valid path
 - Implemented proper error handling and reporting for the copying process
 
-These fixes ensure that:
-1. Both chat and wiki generation use the same ollama_nomic embeddings
-2. Repository ID normalization is consistent across the codebase, replacing ALL non-alphanumeric characters with underscores
-3. Collection resolution is more robust, handling various formatting of repository IDs
-4. The system handles repository identifiers that aren't valid paths correctly
-5. Tests verify the correct embedding usage
+## 7. LangChain Document Serialization Issue
+
+**Issue:** The chat API was returning LangChain Document objects in the `retrieved_documents` field of the response, but these objects couldn't be serialized to JSON. This caused HTTP 500 Internal Server Error responses when trying to access certain collections, like the "customs_exchange_rate_main" repository, through the chat API.
+
+**Fixes:**
+- Added serialization logic in `get_chat_response` in chat.py to convert LangChain Document objects to dictionaries
+- Implemented a similar conversion in `run_rag_pipeline` in graph.py for comprehensive coverage
+- The conversion checks for Document objects and gracefully handles other types
+
+## 8. Improved Collection Name Resolution
+
+**Issue:** The system was previously using a hardcoded mapping in the frontend to handle problematic repositories like "customs_exchange_rate_main" that required specific ChromaDB collection names. This approach wasn't scalable and required frontend changes for each new problematic repository.
+
+**Fixes:**
+- Moved all collection name resolution logic to the backend in `get_chat_response`
+- Implemented a comprehensive lookup algorithm that tries multiple normalized variations of the repository ID
+- Added dynamic collection detection that checks if collections exist in ChromaDB
+- Removed the need for hardcoded mappings in the frontend
+- Added detailed logging for collection resolution
+- Improved error messages to include resolved collection names
+- Made the collection lookup completely transparent to clients
+
+## 9. Field Name Mismatch in RAG Pipeline
+
+**Issue:** Documents were retrieved by the `retrieve_node` and stored in the state with the key `"retrieved_documents"`, but the `generate_node` was looking for them under the key `"relevant_documents"`. This mismatch caused the "No relevant documents were found" error even when documents were successfully retrieved.
+
+**Fixes:**
+- Updated the `generate_node` function to look for `"retrieved_documents"` instead of `"relevant_documents"`
+- Ensured consistency between all nodes in the RAG pipeline
+- Fixed docstring in the `generate.py` file to reflect the correct field name
+
+These changes significantly improve the robustness of the chat API, allowing it to work seamlessly with different repository naming patterns without requiring frontend changes.
 
 ## Technical Details of the Fixes
 
 1. **In embeddings.py**:
    - Added the `embed_query` method to ChromaOllamaEmbeddingFunction to make it compatible with Chroma's similarity_search
+   - Fixed parameter passing in get_embedding_function to use base_url instead of dimensions
 
 2. **In chat.py**:
    - Added format variations for repository IDs to handle both dot and underscore formats
    - Added collection_name parameter to override collection resolution
    - Fixed repo path resolution to work with vectors-only mode
+   - Added document serialization logic
 
 3. **In retrieve.py**:
    - Updated to use the embedding function from the state instead of hardcoding OpenAIEmbeddings
+   - Used consistent field name "retrieved_documents" for storing retrieved documents
 
-4. **In graph.py**:
+4. **In generate.py**:
+   - Updated to look for "retrieved_documents" instead of "relevant_documents"
+   - Fixed docstring to reflect the correct field name
+
+5. **In graph.py**:
    - Modified run_rag_pipeline to accept None repo_identifier when using collection_name
    - Fixed run_retrieval_only_pipeline to handle ChromaDB v0.6.0's collection name format
    - Added "vectors_only" flag to response metadata
+   - Added document serialization logic
 
-5. **In chroma_utils.py**:
+6. **In chroma_utils.py**:
    - Updated check_collection_exists to work with ChromaDB v0.6.0
 
-6. **For verification**:
-   - Created test_chat.py and test_wiki_embeddings.py scripts to verify consistent embedding usage
-   - Both scripts demonstrate that ollama_nomic embeddings are used for their respective components
+7. **For verification**:
+   - Created test_document_serialization.py to verify proper document serialization
+   - Created test_collection_resolution.py to verify backend-only collection resolution
+   - Updated test_chat_customs.py to work with the new implementation
 
-These changes ensure that the chat functionality correctly uses ollama_nomic embeddings to match the wiki generation process, and properly accesses the ChromaDB collections. 
+These changes ensure that the chat functionality correctly uses ollama_nomic embeddings to match the wiki generation process, properly serializes Document objects for API responses, and correctly accesses the ChromaDB collections. 
