@@ -18,9 +18,15 @@
 
 - **Instant Documentation**: Turn any GitHub, GitLab or BitBucket repo into a wiki in seconds
 - **Private Repository Support**: Securely access private repositories with personal access tokens
-- **Smart Analysis**: AI-powered understanding of code structure and relationships
-- **Beautiful Diagrams**: Automatic Mermaid diagrams to visualize architecture and data flow
-- **Easy Navigation**: Simple, intuitive interface to explore the wiki
+- **Local Repository Analysis**: Analyze repositories directly from your local filesystem
+- **Interactive Mermaid Diagrams**: Automatically creates visual diagrams for architecture, workflows, and data flows
+- **LLM-Powered Auto-Fix**: Automatically detects and fixes Mermaid diagram syntax errors using AI when diagrams fail to render
+- **Smart Wiki Structure**: Intelligently organizes documentation based on repo type and contents
+- **Context-Aware Generation**: Creates documentation tailored to the specific technologies in your repo
+- **Self-Contained**: All generated documentation is stored locally for privacy and performance
+- **Responsive Design**: Clean, modern UI that works on desktop and mobile devices
+- **Repository Snapshots**: Get a quick overview of the technologies, languages, and services used in the project
+- **Progressive Content Generation**: Watch the documentation generate in real-time, with visual progress tracking
 - **Ask Feature**: Chat with your repository using RAG-powered AI to get accurate answers
 - **DeepResearch**: Multi-turn research process that thoroughly investigates complex topics
 

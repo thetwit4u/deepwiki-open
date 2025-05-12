@@ -82,13 +82,62 @@ export async function GET(req: NextRequest) {
   let rawContent = await res.text();
   console.log(`[FRONTEND DEBUG] Received ${rawContent.length} bytes of content`);
   
-  // Check if content looks like it's JSON-escaped (has \\n, \\\`, etc.)
-  if (rawContent.includes('\\n') || rawContent.includes('\\`') || rawContent.includes('\\\\')) {
-    rawContent = unescapeJsonString(rawContent);
+  // Debug the raw content structure
+  console.log(`[FRONTEND DEBUG] Content starts with: ${rawContent.substring(0, 100)}`);
+  
+  // Check if content appears to be nested JSON (JSON string within JSON)
+  let parsedData: any = {};
+  try {
+    // First parse the outer JSON
+    parsedData = JSON.parse(rawContent);
+    console.log(`[FRONTEND DEBUG] Parsed outer JSON. Content field type: ${typeof parsedData.content}`);
+    
+    // Check if content looks like a stringified JSON
+    if (typeof parsedData.content === 'string' && 
+        (parsedData.content.startsWith('{') || parsedData.content.startsWith('{"'))) {
+      try {
+        // Try to parse the inner JSON
+        const innerJson = JSON.parse(parsedData.content);
+        console.log(`[FRONTEND DEBUG] Found nested JSON. Unwrapping.`);
+        
+        // If inner JSON has content and metadata, use those directly
+        if (innerJson.content) {
+          return NextResponse.json({
+            content: innerJson.content,
+            metadata: innerJson.metadata || {}
+          });
+        }
+      } catch (innerErr) {
+        console.log(`[FRONTEND DEBUG] Failed to parse inner JSON: ${innerErr}`);
+        // Continue with regular flow if inner JSON parsing fails
+      }
+    }
+    
+    // Check if content looks like it's JSON-escaped (has \\n, \\\`, etc.)
+    if (parsedData.content && 
+        (parsedData.content.includes('\\n') || 
+         parsedData.content.includes('\\`') || 
+         parsedData.content.includes('\\\\'))) {
+      parsedData.content = unescapeJsonString(parsedData.content);
+    }
+    
+    // Extract frontmatter if present
+    if (parsedData.content) {
+      const { metadata, content } = extractFrontmatter(parsedData.content);
+      return NextResponse.json({
+        content: content,
+        metadata: { ...parsedData.metadata, ...metadata }
+      });
+    }
+    
+    return NextResponse.json(parsedData);
+  } catch (err) {
+    console.error(`[FRONTEND DEBUG] Error parsing response: ${err}`, rawContent);
+    
+    // Fall back to returning the raw content if JSON parsing fails
+    return NextResponse.json({ 
+      content: rawContent,
+      metadata: {}
+    });
   }
-  
-  // Extract frontmatter and content
-  const { metadata, content } = extractFrontmatter(rawContent);
-  
-  return NextResponse.json({ content, metadata });
 } 

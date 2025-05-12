@@ -442,6 +442,36 @@ You are an expert technical writer and code analyst. Generate a detailed Markdow
   ---
   ```
 - If the section requires a diagram (see tags or description), include a mermaid code block with an appropriate diagram.
+- IMPORTANT: Mermaid diagrams MUST be enclosed in proper code fences with the mermaid language identifier, like this:
+  ```mermaid
+  graph TD
+    A["Start"] --> B["Process"]
+    B --> C["End"]
+  ```
+- CRITICAL: Always enclose node labels in double quotes if they contain spaces or special characters:
+  - DO: A["Node Label"] --> B["Another Node"]
+  - DON'T: A[Node Label] --> B[Another Node]
+- NEVER format mermaid diagrams like this (without code fences):
+  mermaid
+  graph TD
+    A["Start"] --> B["Process"]
+    B --> C["End"]
+- CRITICAL: Do NOT include any explanatory text, comments, or descriptions inside the mermaid code block. The mermaid block should ONLY contain valid mermaid syntax. Place any explanations before or after the diagram in regular markdown text.
+- INCORRECT (with text inside mermaid block):
+  ```mermaid
+  graph TD
+    A["Start"] --> B["Process"]
+    B --> C["End"]
+    
+    This is a simple workflow diagram showing the process flow.
+  ```
+- CORRECT (text outside mermaid block):
+  ```mermaid
+  graph TD
+    A["Start"] --> B["Process"]
+    B --> C["End"]
+  ```
+  This is a simple workflow diagram showing the process flow.
 - Use information from the README and file structure as context.
 - Write clear, technical, and concise documentation. Use Markdown formatting.
 - Do not include any text outside the Markdown (no explanations, no code block wrappers).
@@ -507,6 +537,35 @@ You are an expert technical writer and AWS cloud architect. Generate a detailed 
   * Repository size and structure summary
 - Use a table format where appropriate.
 - If possible, include a Mermaid diagram showing how AWS services interact.
+- IMPORTANT: Mermaid diagrams MUST be enclosed in proper code fences with the mermaid language identifier, like this:
+  ```mermaid
+  graph TD
+    A["Lambda"] --> B["DynamoDB"]
+    C["API Gateway"] --> A
+  ```
+- CRITICAL: Always enclose node labels in double quotes if they contain spaces or special characters:
+  - DO: A["Lambda Function"] --> B["DynamoDB Table"]
+  - DON'T: A[Lambda Function] --> B[DynamoDB Table]
+- CRITICAL: Do NOT include any explanatory text, comments, or descriptions inside the mermaid code block. The mermaid block should ONLY contain valid mermaid syntax. Place any explanations before or after the diagram in regular markdown text.
+- INCORRECT (with text inside mermaid block):
+  ```mermaid
+  graph TD
+    A["Lambda"] --> B["DynamoDB"]
+    
+    This diagram shows how Lambda connects to DynamoDB.
+  ```
+- CORRECT (text outside mermaid block):
+  ```mermaid
+  graph TD
+    A["Lambda"] --> B["DynamoDB"]
+    C["API Gateway"] --> A
+  ```
+  This diagram shows how Lambda connects to DynamoDB and receives requests from API Gateway.
+- NEVER format mermaid diagrams like this (without code fences):
+  mermaid
+  graph TD
+    A["Lambda"] --> B["DynamoDB"]
+    C["API Gateway"] --> A
 - Use information from the README and file structure as context.
 - Write clear, technical, and concise documentation using proper Markdown formatting.
 - Do not include any text outside the Markdown (no explanations, no code block wrappers).
@@ -546,6 +605,32 @@ AWS-Related Files:
             
             # 3. Ensure there's at least one empty line after frontmatter
             md_content = re.sub(r'---\s*\n', '---\n\n', md_content)
+
+            # 4. Fix incorrectly formatted mermaid diagrams (without code fence)
+            # Look for "mermaid\ngraph" pattern which indicates incorrectly formatted diagrams
+            mermaid_pattern = re.compile(r'\n(mermaid)\s*\n(graph\s+[A-Z][A-Z][\s\S]*?)(?=\n##|\n#|\Z)', re.MULTILINE)
+            if mermaid_pattern.search(md_content):
+                md_content = mermaid_pattern.sub(r'\n```mermaid\n\2\n```\n', md_content)
+                print(f"[SECTION-CONTENT] Fixed mermaid diagram format for {section_id}")
+
+            # Handle other common mermaid diagram types
+            sequence_pattern = re.compile(r'\n(mermaid)\s*\n(sequenceDiagram[\s\S]*?)(?=\n##|\n#|\Z)', re.MULTILINE)
+            if sequence_pattern.search(md_content):
+                md_content = sequence_pattern.sub(r'\n```mermaid\n\2\n```\n', md_content)
+                print(f"[SECTION-CONTENT] Fixed sequence diagram format for {section_id}")
+
+            flowchart_pattern = re.compile(r'\n(mermaid)\s*\n(flowchart\s+[A-Z][A-Z][\s\S]*?)(?=\n##|\n#|\Z)', re.MULTILINE)
+            if flowchart_pattern.search(md_content):
+                md_content = flowchart_pattern.sub(r'\n```mermaid\n\2\n```\n', md_content)
+                print(f"[SECTION-CONTENT] Fixed flowchart diagram format for {section_id}")
+
+            # Check for incomplete mermaid diagrams (no ending ```)
+            mermaid_blocks = re.findall(r'```mermaid\n[\s\S]*?(?=```|\n##|\n#|\Z)', md_content)
+            for block in mermaid_blocks:
+                if not block.endswith('```'):
+                    fixed_block = block + '\n```'
+                    md_content = md_content.replace(block, fixed_block)
+                    print(f"[SECTION-CONTENT] Added missing closing fence to mermaid diagram in {section_id}")
             
             with open(md_path, "w", encoding="utf-8") as f:
                 f.write(md_content)

@@ -153,4 +153,5 @@ Once Phase 1 is complete, we'll proceed to:
 - [x] Standardize wiki page generation to use consistent frontmatter format (2024-07-29)
 - [x] Add regenerate-wiki endpoint to update existing wikis with standardized frontmatter (2024-07-29)
 - [x] Improve progress status handling by validating against actual content (2024-07-29)
-- [x] Add reset-wiki-status endpoint to fix incorrect status states (2024-07-29) 
+- [x] Add reset-wiki-status endpoint to fix incorrect status states (2024-07-29)
+- [x] Implement LLM-powered auto-fix for Mermaid diagram errors with a maximum of two attempts (2024-08-03) 

@@ -7,6 +7,7 @@ import SectionContent from "@/components/SectionContent";
 import AddRepoCard from "@/components/AddRepoCard";
 import RepoList from "@/components/RepoList";
 import RepoDetailsCard from "@/components/RepoDetailsCard";
+import { useRouter, useSearchParams } from "next/navigation";
 
 interface Repo {
   id: string;
@@ -23,6 +24,8 @@ interface Section {
 }
 
 export default function Home() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [repos, setRepos] = useState<Repo[]>([]);
   const [selected, setSelected] = useState<Repo | null>(null);
   const [loading, setLoading] = useState(true);
@@ -42,12 +45,51 @@ export default function Home() {
       .then((data) => {
         setRepos(data.repos || []);
         setLoading(false);
+        
+        // Check if there's a repo ID in the URL and select it if it exists
+        const repoIdFromUrl = searchParams.get('repo');
+        if (repoIdFromUrl) {
+          const repoFromUrl = (data.repos || []).find((r: Repo) => r.id === repoIdFromUrl);
+          if (repoFromUrl) {
+            setSelected(repoFromUrl);
+          }
+        }
       });
   };
 
   useEffect(() => {
     fetchRepos();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Handle repo selection and update URL
+  const handleSelectRepo = (repo: Repo) => {
+    setSelected(repo);
+    
+    // Update the URL with the repo ID
+    const params = new URLSearchParams();
+    params.set('repo', repo.id);
+    router.push(`/?${params.toString()}`);
+  };
+
+  // Handle deselect repo and remove from URL
+  const handleDeselectRepo = () => {
+    setSelected(null);
+    router.push('/');
+  };
+
+  // Handle section selection and update URL
+  const handleSelectSection = (sectionId: string) => {
+    setSelectedSection(sectionId);
+    
+    // Update the URL with both repo and section IDs
+    const params = new URLSearchParams();
+    if (selected) {
+      params.set('repo', selected.id);
+    }
+    params.set('section', sectionId);
+    router.push(`/?${params.toString()}`);
+  };
 
   useEffect(() => {
     if (selected) {
@@ -55,9 +97,15 @@ export default function Home() {
         .then((res) => res.json())
         .then((data) => {
           setSections(data.sections || []);
-          // Default to first section
-          if (data.sections && data.sections.length > 0) {
-            setSelectedSection(data.sections[0].id);
+          
+          // Check if there's a section ID in the URL
+          const sectionIdFromUrl = searchParams.get('section');
+          if (sectionIdFromUrl && data.sections && data.sections.find((s: Section) => s.id === sectionIdFromUrl)) {
+            setSelectedSection(sectionIdFromUrl);
+          }
+          // Otherwise default to first section
+          else if (data.sections && data.sections.length > 0) {
+            handleSelectSection(data.sections[0].id);
           }
         });
     } else {
@@ -65,6 +113,7 @@ export default function Home() {
       setSelectedSection(null);
       setSectionContent("");
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected]);
 
   useEffect(() => {
@@ -118,7 +167,7 @@ export default function Home() {
           repoSearch={repoSearch}
           setRepoSearch={setRepoSearch}
           filteredRepos={filteredRepos}
-          onSelectRepo={setSelected}
+          onSelectRepo={handleSelectRepo}
         />
       </div>
     );
@@ -131,9 +180,9 @@ export default function Home() {
         sections={sections}
         open={sidebarOpen}
         selectedSection={selectedSection}
-        onSelectSection={setSelectedSection}
+        onSelectSection={handleSelectSection}
       />
-      <RepoDetailsCard repo={selected} onDeselect={() => setSelected(null)}>
+      <RepoDetailsCard repo={selected} onDeselect={handleDeselectRepo}>
         {contentLoading ? (
           <div className="p-8 text-gray-500">Loading section content...</div>
         ) : (

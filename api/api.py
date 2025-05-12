@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, PlainTextResponse, JSONResponse
 from typing import List, Optional, Dict, Any, Literal
 import json
+import re  # Add import for regular expressions
 from datetime import datetime
 from pydantic import BaseModel, Field
 import google.generativeai as genai
@@ -1031,3 +1032,296 @@ async def reset_wiki_status(
         "repo_id": repo_id,
         "message": f"Wiki status reset to '{new_status}'"
     }
+
+# Add endpoint to fix Mermaid diagram syntax errors
+class FixMermaidRequest(BaseModel):
+    diagram: str = Field(..., description="The Mermaid diagram code with errors")
+    error: str = Field(..., description="The error message from Mermaid.js")
+    attempt: int = Field(1, description="Current attempt number (1 or 2)")
+
+class FixMermaidResponse(BaseModel):
+    fixed_diagram: str = Field(..., description="The corrected Mermaid diagram code")
+
+@app.post("/fix-mermaid", response_model=FixMermaidResponse)
+async def fix_mermaid(request: FixMermaidRequest = Body(...)):
+    """
+    Fix Mermaid diagram syntax errors using LLM.
+    
+    Args:
+        request: The request containing the diagram, error message, and attempt number
+        
+    Returns:
+        The corrected Mermaid diagram code
+    """
+    try:
+        diagram = request.diagram
+        error_message = request.error
+        attempt = request.attempt
+        
+        if not diagram or not error_message:
+            raise HTTPException(status_code=400, detail="Missing diagram or error message")
+        
+        # Import the LLM components
+        try:
+            from langchain_google_genai import ChatGoogleGenerativeAI
+        except ImportError:
+            from langchain.chat_models import ChatGoogleGenerativeAI
+            
+        # Use the same LLM infrastructure as the rest of the app
+        llm = ChatGoogleGenerativeAI(
+            model="gemini-2.5-flash-preview-04-17",
+            temperature=0.2,  # Lower temperature for more deterministic fixes
+            top_p=0.8,
+            top_k=40
+        )
+        
+        # Create prompt with context about the error
+        prompt = f"""
+You are an expert in Mermaid diagram syntax. A user has a Mermaid diagram with errors that needs fixing.
+
+DIAGRAM WITH ERRORS:
+```mermaid
+{diagram}
+```
+
+ERROR MESSAGE:
+{error_message}
+
+This is attempt #{attempt} to fix the diagram.
+
+Common Mermaid diagram issues include:
+1. Unquoted node labels containing spaces (should be in double quotes: A["Label with spaces"])
+2. Invalid connections between nodes
+3. Syntax errors in graph direction (should be TD, LR, etc.)
+4. Missing or mismatched quotes
+5. Non-diagram text or explanations inside the diagram (should be removed)
+6. Mismatched subgraph declarations
+7. Invalid special characters in node IDs or labels
+8. Incorrect styling syntax
+
+Your task:
+1. Carefully analyze the diagram and error message
+2. Fix ONLY the specific syntax errors while preserving the diagram's meaning and structure
+3. Return ONLY the fixed diagram code, without any explanations or markdown fences
+4. If the error involves unquoted labels with spaces, add double quotes around all labels with spaces
+5. Remove any non-diagram text, comments, or explanations from inside the diagram
+
+Return ONLY the corrected Mermaid diagram code without any explanation, markdown fence, or any other text.
+"""
+        
+        from langchain_core.prompts import ChatPromptTemplate
+        from langchain_core.output_parsers import StrOutputParser
+        
+        # Create the chain
+        chain = ChatPromptTemplate.from_messages([("user", prompt)]) | llm | StrOutputParser()
+        
+        # Execute the chain
+        fixed_diagram = chain.invoke({})
+        
+        # Clean up the response - remove any markdown code fences if the LLM added them
+        fixed_diagram = re.sub(r'```mermaid\s*\n', '', fixed_diagram)
+        fixed_diagram = re.sub(r'```\s*$', '', fixed_diagram)
+        fixed_diagram = fixed_diagram.strip()
+        
+        return {"fixed_diagram": fixed_diagram}
+        
+    except Exception as e:
+        logger.error(f"Error fixing Mermaid diagram: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error fixing Mermaid diagram: {str(e)}")
+
+# Add endpoint with /api prefix that points to the same function
+@app.post("/api/fix-mermaid", response_model=FixMermaidResponse)
+async def fix_mermaid_with_api_prefix(request: FixMermaidRequest = Body(...)):
+    """
+    Fix Mermaid diagram syntax errors using LLM.
+    
+    This endpoint mirrors the functionality of /fix-mermaid but with the /api prefix
+    to maintain compatibility with frontend requests.
+    
+    Args:
+        request: The request containing the diagram, error message, and attempt number
+        
+    Returns:
+        The corrected Mermaid diagram code
+    """
+    try:
+        # Import here to ensure re module is available in this function scope
+        import re  # Ensure re module is available locally
+        
+        diagram = request.diagram
+        error_message = request.error
+        attempt = request.attempt
+        
+        if not diagram or not error_message:
+            raise HTTPException(status_code=400, detail="Missing diagram or error message")
+        
+        # Import the LLM components
+        try:
+            from langchain_google_genai import ChatGoogleGenerativeAI
+        except ImportError:
+            from langchain.chat_models import ChatGoogleGenerativeAI
+            
+        # Use the same LLM infrastructure as the rest of the app
+        llm = ChatGoogleGenerativeAI(
+            model="gemini-2.5-flash-preview-04-17",
+            temperature=0.2,  # Lower temperature for more deterministic fixes
+            top_p=0.8,
+            top_k=40
+        )
+        
+        # Create prompt with context about the error
+        prompt = f"""
+You are an expert in Mermaid diagram syntax. A user has a Mermaid diagram with errors that needs fixing.
+
+DIAGRAM WITH ERRORS:
+```mermaid
+{diagram}
+```
+
+ERROR MESSAGE:
+{error_message}
+
+This is attempt #{attempt} to fix the diagram.
+
+Common Mermaid diagram issues include:
+1. Unquoted node labels containing spaces (should be in double quotes: A["Label with spaces"])
+2. Invalid connections between nodes
+3. Syntax errors in graph direction (should be TD, LR, etc.)
+4. Missing or mismatched quotes
+5. Non-diagram text or explanations inside the diagram (should be removed)
+6. Mismatched subgraph declarations
+7. Invalid special characters in node IDs or labels
+8. Incorrect styling syntax
+
+Your task:
+1. Carefully analyze the diagram and error message
+2. Fix ONLY the specific syntax errors while preserving the diagram's meaning and structure
+3. Return ONLY the fixed diagram code, without any explanations or markdown fences
+4. If the error involves unquoted labels with spaces, add double quotes around all labels with spaces
+5. Remove any non-diagram text, comments, or explanations from inside the diagram
+
+Return ONLY the corrected Mermaid diagram code without any explanation, markdown fence, or any other text.
+"""
+        
+        from langchain_core.prompts import ChatPromptTemplate
+        from langchain_core.output_parsers import StrOutputParser
+        
+        # Create the chain
+        chain = ChatPromptTemplate.from_messages([("user", prompt)]) | llm | StrOutputParser()
+        
+        # Execute the chain
+        fixed_diagram = chain.invoke({})
+        
+        # Clean up the response - remove any markdown code fences if the LLM added them
+        fixed_diagram = re.sub(r'```mermaid\s*\n', '', fixed_diagram)
+        fixed_diagram = re.sub(r'```\s*$', '', fixed_diagram)
+        fixed_diagram = fixed_diagram.strip()
+        
+        return {"fixed_diagram": fixed_diagram}
+        
+    except Exception as e:
+        logger.error(f"Error fixing Mermaid diagram: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error fixing Mermaid diagram: {str(e)}")
+
+# Add endpoint to update wiki section content
+class UpdateSectionContentRequest(BaseModel):
+    repo_url: str = Field(..., description="Repository URL or path")
+    section_id: str = Field(..., description="Section ID")
+    content: str = Field(..., description="Updated section content")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Optional metadata")
+
+@app.post("/update-section-content")
+async def update_section_content(request: UpdateSectionContentRequest = Body(...)):
+    """
+    Update the content of a wiki section, typically used when automatically fixing Mermaid diagrams.
+    
+    Args:
+        request: The request containing the section ID, repo URL, and updated content
+        
+    Returns:
+        Status message indicating success or failure
+    """
+    try:
+        import os
+        import yaml
+        import re
+        
+        print(f"[DEBUG update_section_content] Request to update section {request.section_id} for repo {request.repo_url}")
+        
+        # Find the wiki directory
+        repo_dir, is_legacy = find_wiki_directory(request.repo_url)
+        
+        # Construct the path to the markdown file
+        md_path = os.path.join(repo_dir, "pages", f"{request.section_id}.md")
+        print(f"[DEBUG update_section_content] Looking for markdown file at: {md_path}")
+        
+        if not os.path.exists(md_path):
+            print(f"[DEBUG update_section_content] File not found: {md_path}")
+            raise HTTPException(status_code=404, detail="Section file not found")
+        
+        # Read the existing file to extract frontmatter
+        with open(md_path, 'r', encoding='utf-8') as f:
+            original_content = f.read()
+        
+        # Extract YAML frontmatter if it exists
+        metadata = {}
+        yaml_frontmatter = None
+        
+        # Check for frontmatter patterns
+        dash_pattern = re.compile(r'^---\s*\n([\s\S]*?)---\s*\n', re.MULTILINE)
+        dash_match = dash_pattern.search(original_content)
+        
+        if dash_match:
+            yaml_frontmatter = dash_match.group(1)
+            print(f"[DEBUG update_section_content] Found frontmatter: {yaml_frontmatter[:100]}...")
+            try:
+                metadata = yaml.safe_load(yaml_frontmatter)
+            except Exception as e:
+                logger.error(f"Error parsing YAML frontmatter: {e}")
+                print(f"[DEBUG update_section_content] Error parsing frontmatter: {e}")
+        
+        # Merge with new metadata if provided
+        if request.metadata:
+            metadata.update(request.metadata)
+        
+        # Update the last_updated timestamp
+        metadata["last_updated"] = datetime.utcnow().isoformat() + "Z"
+        metadata["auto_fixed"] = True
+        
+        # Generate new content with frontmatter
+        frontmatter = yaml.dump(metadata, default_flow_style=False)
+        new_content = f"---\n{frontmatter}---\n\n{request.content}"
+        
+        # Write the updated content back to the file
+        with open(md_path, 'w', encoding='utf-8') as f:
+            f.write(new_content)
+        
+        print(f"[DEBUG update_section_content] Successfully updated section {request.section_id}")
+        
+        return {
+            "status": "success",
+            "message": f"Section {request.section_id} updated successfully",
+            "last_updated": metadata["last_updated"]
+        }
+        
+    except Exception as e:
+        error_msg = f"Error updating section content: {str(e)}"
+        logger.error(error_msg)
+        raise HTTPException(status_code=500, detail=error_msg)
+
+# Add duplicate endpoint with /api prefix that points to the same function
+@app.post("/api/update-section-content")
+async def update_section_content_with_api_prefix(request: UpdateSectionContentRequest = Body(...)):
+    """
+    Update the content of a wiki section with API prefix path.
+    
+    This endpoint mirrors the functionality of /update-section-content but with the /api prefix
+    to maintain compatibility with frontend requests.
+    
+    Args:
+        request: The request containing the section ID, repo URL, and updated content
+        
+    Returns:
+        Status message indicating success or failure
+    """
+    return await update_section_content(request)
