@@ -558,56 +558,32 @@ async def wiki_section(repo_url: str = Query(..., description="Repository URL or
     metadata = {}
     yaml_frontmatter = None
     clean_content = content
-    
-    # Case 1: Handle mixed format with ```markdown and --- frontmatter
-    mixed_pattern = re.compile(r'^```markdown\s*\n---\s*\n([\s\S]*?)---\s*\n', re.MULTILINE)
-    mixed_match = mixed_pattern.search(content)
-    
-    if mixed_match:
-        yaml_frontmatter = mixed_match.group(1)
-        print(f"[DEBUG wiki_section] Found mixed frontmatter: {yaml_frontmatter[:100]}...")
-        # Remove the entire block including ```markdown
-        clean_content = re.sub(r'^```markdown\s*\n---\s*\n[\s\S]*?---\s*\n', '', content)
-        # Also remove the trailing ``` if it exists
-        clean_content = re.sub(r'\n```\s*$', '', clean_content)
-    else:
-        # Case 2: Handle ```yaml format
-        yaml_pattern = re.compile(r'^```yaml\s*\n([\s\S]*?)(\n```|$)', re.MULTILINE)
-        yaml_match = yaml_pattern.search(content)
-        
-        if yaml_match:
-            yaml_frontmatter = yaml_match.group(1)
-            print(f"[DEBUG wiki_section] Found YAML code block frontmatter: {yaml_frontmatter[:100]}...")
-            # Remove the YAML block from content, including the closing ```
-            clean_content = re.sub(r'^```yaml\s*\n[\s\S]*?(\n```|$)', '', content)
-        else:
-            # Case 3: Handle standard --- format
-            dash_pattern = re.compile(r'^---\s*\n([\s\S]*?)---\s*\n', re.MULTILINE)
-            dash_match = dash_pattern.search(content)
-            if dash_match:
-                yaml_frontmatter = dash_match.group(1)
-                print(f"[DEBUG wiki_section] Found dash frontmatter: {yaml_frontmatter[:100]}...")
-                # Remove the dash block from content
-                clean_content = dash_pattern.sub('', content)
-            else:
-                print("[DEBUG wiki_section] No frontmatter found")
-    
-    # Parse the YAML if found
-    if yaml_frontmatter:
+
+    # Only match --- frontmatter at the very top of the file
+    dash_pattern = re.compile(r'^---\s*\n([\s\S]*?)---\s*\n', re.MULTILINE)
+    dash_match = dash_pattern.match(content)
+    if dash_match:
+        yaml_frontmatter = dash_match.group(1)
+        print(f"[DEBUG wiki_section] Found dash frontmatter: {yaml_frontmatter[:100]}...")
+        # Remove the dash block from content
+        clean_content = dash_pattern.sub('', content, count=1)
         try:
             metadata = yaml.safe_load(yaml_frontmatter)
             print(f"[DEBUG wiki_section] Parsed metadata: {str(metadata)[:200]}...")
         except Exception as e:
             logger.error(f"Error parsing YAML frontmatter: {e}")
             print(f"[DEBUG wiki_section] Error parsing frontmatter: {e}")
-    
+            metadata = {}
+    else:
+        print("[DEBUG wiki_section] No valid frontmatter found at top of file")
+
     # Debug clean content
     print(f"[DEBUG wiki_section] Clean content length: {len(clean_content)}")
     print(f"[DEBUG wiki_section] Clean content first 100 chars: {clean_content[:100]}")
-    
+
     # Remove any remaining Markdown code block markers
     clean_content = re.sub(r'^\s*```\s*$', '', clean_content, flags=re.MULTILINE)
-    
+
     # Return the clean content and metadata
     response_data = {
         "content": clean_content.strip(),
@@ -794,12 +770,28 @@ async def start_wiki_generation(
                 update_progress_file(progress_path, progress)
                 if repo_is_git:
                     try:
-                        subprocess.run(["git", "clone", repo_url, repo_dest], check=True)
-                    except Exception as e:
+                        env = os.environ.copy()
+                        env["GIT_TERMINAL_PROMPT"] = "0"
+                        result = subprocess.run(
+                            ["git", "clone", repo_url, repo_dest],
+                            check=True,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            timeout=120,
+                            env=env
+                        )
+                    except subprocess.CalledProcessError as e:
+                        error_msg = f"Error cloning repo: {e}\nSTDOUT: {e.stdout.decode('utf-8', errors='ignore')}\nSTDERR: {e.stderr.decode('utf-8', errors='ignore')}"
                         progress["status"] = "error"
-                        progress["log"].append(f"Error cloning repo: {e}")
+                        progress["log"].append(error_msg)
                         update_progress_file(progress_path, progress)
-                        return progress
+                        return {"status": "error", "log": progress["log"], "error": error_msg}
+                    except Exception as e:
+                        error_msg = f"Error cloning repo: {e}"
+                        progress["status"] = "error"
+                        progress["log"].append(error_msg)
+                        update_progress_file(progress_path, progress)
+                        return {"status": "error", "log": progress["log"], "error": error_msg}
                 else:
                     # Check if the repo_url is a valid directory path
                     if os.path.isdir(repo_url):
