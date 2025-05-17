@@ -158,13 +158,13 @@ export default function ChatPanel({ repoId, collectionName }: ChatPanelProps) {
                     <div className="mt-2 text-[11px] text-gray-500">
                       <div className="font-semibold mb-1">Sources used:</div>
                       <ol className="list-decimal list-inside">
-                        {message.sources.map((src, i) => (
-                          <li key={i} className="truncate">
-                            {src.file_path ? (
-                              <span title={src.file_path}>{formatSourcePath(src.file_path)}</span>
-                            ) : (
-                              <span>[Unknown source]</span>
-                            )}
+                        {Array.from(new Map(
+                          message.sources
+                            .filter(src => src.file_path)
+                            .map(src => [src.file_path, src])
+                        ).values()).map((src, i) => (
+                          <li key={i}>
+                            {src.file_path ? formatSourcePath(src.file_path as string) : '[Unknown source]'}
                           </li>
                         ))}
                       </ol>

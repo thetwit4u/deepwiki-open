@@ -107,13 +107,16 @@ def generate_wiki_structure_with_llm(repo_identifier: str, detected_types: list 
     repo_dir = None
     file_list = []
     readme_content = None
+    # Always use normalized repo directory under wiki-data/repos
+    from api.langgraph.wiki_structure import get_wiki_data_dir, normalize_repo_id
+    normalized_id = normalize_repo_id(repo_identifier)
+    candidate_repo_dir = os.path.join(get_wiki_data_dir(), "repos", normalized_id)
     if repo_context_path and os.path.exists(repo_context_path):
         repo_dir = repo_context_path
         print(f"[WIKI-STRUCTURE] Using provided repository path: {repo_dir}")
-    elif not (repo_identifier.startswith("http://") or repo_identifier.startswith("https://")):
-        if os.path.exists(repo_identifier):
-            repo_dir = repo_identifier
-            print(f"[WIKI-STRUCTURE] Using repository identifier as path: {repo_dir}")
+    elif os.path.exists(candidate_repo_dir):
+        repo_dir = candidate_repo_dir
+        print(f"[WIKI-STRUCTURE] Using normalized repository path: {repo_dir}")
     # --- RAG retrieval for structure context ---
     rag_file_list = []
     if repo_dir:
@@ -132,7 +135,7 @@ def generate_wiki_structure_with_llm(repo_identifier: str, detected_types: list 
             retrieved_docs = rag_result.get("retrieved_documents", [])
             if retrieved_docs:
                 for doc in retrieved_docs:
-                    file_path = doc.metadata.get("file_path")
+                    file_path = doc["metadata"].get("file_path") if isinstance(doc, dict) else doc.metadata.get("file_path")
                     if file_path and file_path not in rag_file_list:
                         rag_file_list.append(file_path)
                 print(f"[WIKI-STRUCTURE] RAG selected {len(rag_file_list)} files for structure context")
@@ -351,22 +354,21 @@ def generate_section_content(
     from datetime import datetime
     from langchain_core.prompts import ChatPromptTemplate
     from langchain_core.output_parsers import StrOutputParser
-    
     print(f"[SECTION-CONTENT] Starting content generation for repository: {repo_identifier}")
     structure = load_structure_from_disk(repo_identifier)
     if not structure:
         structure = get_wiki_structure(repo_identifier, detected_types, use_llm=True, force_reindex=force_reindex)
     print(f"[SECTION-CONTENT] Got wiki structure with {len(structure['sections'])} sections")
-    
     # Gather repo context (file list, README)
     repo_dir = None
     file_list = []
     readme_content = None
-    if repo_identifier.startswith("http://") or repo_identifier.startswith("https://"):
-        repo_dir = None  # Not supported for remote yet
-    else:
-        if os.path.exists(repo_identifier):
-            repo_dir = repo_identifier
+    from api.langgraph.wiki_structure import get_wiki_data_dir, normalize_repo_id
+    normalized_id = normalize_repo_id(repo_identifier)
+    candidate_repo_dir = os.path.join(get_wiki_data_dir(), "repos", normalized_id)
+    if os.path.exists(candidate_repo_dir):
+        repo_dir = candidate_repo_dir
+        print(f"[SECTION-CONTENT] Using normalized repository path: {repo_dir}")
     if repo_dir:
         try:
             file_list = []

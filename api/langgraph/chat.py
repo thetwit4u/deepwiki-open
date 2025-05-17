@@ -87,15 +87,15 @@ def resolve_repo_path_for_chat(repo_id: str, collection_name: str = None) -> Dic
     Returns:
         Dictionary with resolved path and configuration info
     """
-    # Import locally to avoid circular imports
     from api.api import find_wiki_directory
     from api.langgraph.chroma_utils import check_collection_exists, generate_collection_name, get_persistent_dir, get_chroma_client
     from api.langgraph.wiki_structure import normalize_repo_id
-    
+    import re
+
     embedding_provider = "ollama_nomic"
     normalized_repo_id = normalize_repo_id(repo_id)
     print(f"Normalized repository ID: '{normalized_repo_id}' (from '{repo_id}')")
-    
+
     # If collection_name is provided, skip the collection search
     if collection_name:
         persistent_dir = get_persistent_dir()
@@ -105,25 +105,34 @@ def resolve_repo_path_for_chat(repo_id: str, collection_name: str = None) -> Dic
         else:
             print(f"Warning: Provided collection '{collection_name}' doesn't exist")
     else:
-        # Always list all collections and filter for those starting with normalized_repo_id
         persistent_dir = get_persistent_dir()
         client = get_chroma_client(persistent_dir)
         all_collections = client.list_collections()
-        # Convert to string if needed
         all_collection_names = [str(c) for c in all_collections]
-        # Find any collection whose name starts with 'local_{normalized_repo_id}_'
-        prefix = f"local_{normalized_repo_id}_"
-        matching = [name for name in all_collection_names if name.startswith(prefix)]
+        # Try both local_ and git_ prefixes
+        possible_prefixes = [
+            f"local_{normalized_repo_id}_",
+            f"git_{normalized_repo_id}_",
+        ]
+        # Also try with just the repo name (for local clones)
+        repo_name = normalized_repo_id.split("_")[-1]
+        possible_prefixes.append(f"local_{repo_name}_")
+        possible_prefixes.append(f"git_{repo_name}_")
+        matching = []
+        for prefix in possible_prefixes:
+            matching += [name for name in all_collection_names if name.startswith(prefix)]
         if matching:
             collection_name = matching[0]
             print(f"Found collection by prefix match: {collection_name}")
         else:
-            # Fallback to generated collection name
-            temp_collection_name = generate_collection_name(normalized_repo_id)
-            if check_collection_exists(client, temp_collection_name):
-                collection_name = temp_collection_name
-                print(f"Found collection by generated name: {collection_name}")
-            else:
+            # Fallback to generated collection name for both normalized_repo_id and repo_id
+            for rid in [normalized_repo_id, repo_id]:
+                temp_collection_name = generate_collection_name(rid)
+                if check_collection_exists(client, temp_collection_name):
+                    collection_name = temp_collection_name
+                    print(f"Found collection by generated name: {collection_name}")
+                    break
+            if not collection_name:
                 error_msg = f"No existing collection found for {repo_id} with {embedding_provider} embeddings. Please generate the wiki first."
                 print(f"Error resolving repo path: {error_msg}")
                 raise ValueError(error_msg)
@@ -218,49 +227,35 @@ def get_chat_response(repo_id, query, generator_provider="gemini", embedding_pro
             
             # If no collection_name was provided, attempt to find the correct collection
             if not collection_name:
-                # First try to get it from repo config
-                collection_name = repo_config.get("collection_name")
-                
-                # If not in repo config, dynamically look it up using the lookup_collection logic
-                if not collection_name:
-                    from api.langgraph.chroma_utils import get_chroma_client, generate_collection_name, check_collection_exists
-                    
-                    # Normalize the repository ID for consistent handling
-                    from api.langgraph.wiki_structure import normalize_repo_id
-                    normalized_repo_id = normalize_repo_id(repo_id)
-                    
-                    # Create variations of the repo ID to try matching with collections
-                    import re
-                    repo_id_variations = [
-                        repo_id,                           # Original ID
-                        normalized_repo_id,                # Consistently normalized ID
-                        repo_id.replace('.', '_'),         # For backward compatibility
-                        repo_id.replace('-', '_'),         # For backward compatibility
-                        re.sub(r'[^\w]', '_', repo_id),    # Replace all non-word chars with underscore
-                        re.sub(r'[^a-zA-Z0-9]', '_', repo_id) # Replace all non-alphanumeric with underscore
-                    ]
-                    # Remove duplicates
-                    repo_id_variations = list(dict.fromkeys(repo_id_variations))
-                    
-                    # Get ChromaDB client
-                    from api.langgraph.chroma_utils import get_persistent_dir
-                    client = get_chroma_client(get_persistent_dir())
-                    
-                    # Try each variation to find a matching collection
-                    for variation in repo_id_variations:
-                        try:
-                            temp_collection_name = generate_collection_name(variation)
-                            if check_collection_exists(client, temp_collection_name):
-                                collection_name = temp_collection_name
-                                print(f"[DEBUG get_chat_response] Found collection using repository ID variation: '{variation}' -> '{collection_name}'")
-                                break
-                        except Exception as e:
-                            print(f"[DEBUG get_chat_response] Error checking collection for '{variation}': {e}")
-                    
-                    # If still no match, try the custom collection naming pattern for problematic repos
-                    if not collection_name and repo_id == "customs_exchange_rate_main":
-                        collection_name = "local_customs_exchange_rate_main_9cfa74b61a"
-                        print(f"[DEBUG get_chat_response] Using special hardcoded collection for known problematic repository: {collection_name}")
+                from api.langgraph.chroma_utils import get_chroma_client, generate_collection_name, check_collection_exists
+                from api.langgraph.wiki_structure import normalize_repo_id
+                normalized_repo_id = normalize_repo_id(repo_id)
+                client = get_chroma_client(get_persistent_dir())
+                all_collections = client.list_collections()
+                all_collection_names = [str(c) for c in all_collections]
+                possible_prefixes = [
+                    f"local_{normalized_repo_id}_",
+                    f"git_{normalized_repo_id}_",
+                ]
+                repo_name = normalized_repo_id.split("_")[-1]
+                possible_prefixes.append(f"local_{repo_name}_")
+                possible_prefixes.append(f"git_{repo_name}_")
+                matching = []
+                for prefix in possible_prefixes:
+                    matching += [name for name in all_collection_names if name.startswith(prefix)]
+                if matching:
+                    collection_name = matching[0]
+                    print(f"[DEBUG get_chat_response] Found collection by prefix match: '{collection_name}'")
+                else:
+                    for rid in [normalized_repo_id, repo_id]:
+                        temp_collection_name = generate_collection_name(rid)
+                        if check_collection_exists(client, temp_collection_name):
+                            collection_name = temp_collection_name
+                            print(f"[DEBUG get_chat_response] Found collection by generated name: '{collection_name}'")
+                            break
+                if not collection_name and repo_id == "customs_exchange_rate_main":
+                    collection_name = "local_customs_exchange_rate_main_9cfa74b61a"
+                    print(f"[DEBUG get_chat_response] Using special hardcoded collection for known problematic repository: {collection_name}")
             
             print(f"[DEBUG get_chat_response] Using collection name: {collection_name}")
             
