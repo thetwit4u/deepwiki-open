@@ -191,6 +191,58 @@ def run_retrieval_only_pipeline(state):
         }
     }
 
+def full_rag_pipeline(state):
+    """
+    Full RAG pipeline: runs all nodes in sequence (indexing + retrieval + generation).
+    """
+    print("\n==== FULL RAG PIPELINE START ====")
+    print(f"Input state: {state}")
+    final_state = state.copy()
+    nodes = [
+        ("load_documents", load_documents_node),
+        ("split_text", split_text_node),
+        ("embed_documents", embed_documents_node),
+        ("store_vectors", store_vectors_node),
+        ("retrieve", retrieve_node),
+        ("generate", generate_node),
+        ("memory", memory_node),
+    ]
+    for node_name, node_fn in nodes:
+        try:
+            print(f"\n==== Running node: {node_name} ====")
+            result = node_fn(final_state)
+            final_state.update(result)
+        except Exception as e:
+            print(f"\n==== ERROR in full_rag_pipeline for node {node_name} ====\nError: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            final_state[f"error_{node_name}"] = str(e)
+            final_state["answer"] = f"An error occurred in the {node_name} node: {str(e)}"
+            break
+    print("\n==== FULL RAG PIPELINE COMPLETE ====")
+    # Convert to response format
+    retrieved_documents = final_state.get("retrieved_documents", [])
+    serializable_documents = []
+    for doc in retrieved_documents:
+        if hasattr(doc, "page_content") and hasattr(doc, "metadata"):
+            serializable_documents.append({"page_content": doc.page_content, "metadata": doc.metadata})
+        elif isinstance(doc, dict):
+            serializable_documents.append(doc)
+        else:
+            try:
+                serializable_documents.append(dict(doc))
+            except:
+                print(f"Warning: Couldn't serialize document of type {type(doc)}")
+    return {
+        "answer": final_state.get("answer", ""),
+        "memory": final_state.get("memory"),
+        "retrieved_documents": serializable_documents,
+        "metadata": {
+            "collection_name": final_state.get("collection_name"),
+            "timestamp": datetime.now().isoformat()
+        }
+    }
+
 def run_rag_pipeline(
     repo_identifier, 
     query,
@@ -204,47 +256,22 @@ def run_rag_pipeline(
 ):
     """
     Run the RAG pipeline for the given repository identifier and query.
-    
-    Args:
-        repo_identifier: Path to the repository, either local or remote
-        query: Query to answer
-        generator_provider: Provider for the generator LLM (gemini, openai, ollama)
-        embedding_provider: Provider for embeddings (ollama_nomic, openai)
-        top_k: Number of documents to retrieve
-        memory: Memory from previous conversations
-        debug: Whether to print debug info
-        skip_indexing: Whether to skip indexing (for repositories that don't have files)
-        collection_name: Optional specific collection name to use
-        
-    Returns:
-        Response from the pipeline
     """
     try:
-        # If collection_name is provided, we can prioritize using the vector store
-        # instead of requiring a valid repository path
         vectors_only_mode = False
-        
         if collection_name:
             print(f"Processing query with {collection_name}")
             print(f"Using explicitly provided collection name: {collection_name}")
-            
-            # Check if the collection exists
             client = get_chroma_client(get_persistent_dir())
             if check_collection_exists(client, collection_name):
                 print(f"Verified collection '{collection_name}' exists via direct access.")
                 vectors_only_mode = True
             else:
                 print(f"Warning: Provided collection '{collection_name}' does not exist.")
-                # We'll still try to use the repository path
-        
-        # Only check the repo path if we're not in vectors-only mode
-        # and when we're not skipping indexing
         if not vectors_only_mode and not skip_indexing:
-            # Check if repo_identifier is a valid local path
             if not os.path.isdir(repo_identifier):
                 repo_path = os.path.abspath(os.path.join(os.getcwd(), repo_identifier))
                 if not os.path.isdir(repo_path):
-                    # Only raise an error if we don't have a valid collection_name to fall back on
                     if not collection_name:
                         raise ValueError(f"Local directory does not exist: {repo_identifier}")
                     else:
@@ -252,8 +279,6 @@ def run_rag_pipeline(
                         vectors_only_mode = True
                 else:
                     repo_identifier = repo_path
-        
-        # Prepare initial state
         state = {
             "query": query,
             "top_k": top_k,
@@ -262,20 +287,17 @@ def run_rag_pipeline(
             "collection_name": collection_name,
             "repo_identifier": repo_identifier
         }
-        
         if memory:
             state["memory"] = memory
-            
         print(f"Initial state: {state}")
-            
-        # If we're just doing retrieval (no generation)
-        if debug and vectors_only_mode:
+        # --- Pipeline selection logic ---
+        if not skip_indexing:
+            return full_rag_pipeline(state)
+        elif debug and vectors_only_mode:
             return run_retrieval_only_pipeline(state)
         elif debug:
             return debug_rag_pipeline(state)
         else:
-            # TODO: Run full RAG pipeline
-            # For now, fall back to retrieval + generation pipeline for real use
             return debug_rag_pipeline(state)
     except Exception as e:
         error_traceback = traceback.format_exc()

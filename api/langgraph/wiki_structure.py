@@ -458,21 +458,21 @@ You are an expert technical writer and code analyst. Generate a detailed Markdow
     A["Start"] --> B["Process"]
     B --> C["End"]
 - CRITICAL: Do NOT include any explanatory text, comments, or descriptions inside the mermaid code block. The mermaid block should ONLY contain valid mermaid syntax. Place any explanations before or after the diagram in regular markdown text.
+- CRITICAL: If a diagram is included, it MUST always be the last element in the content, with no other text, explanation, or markdown after the diagram. The diagram must be at the very end of the page.
 - INCORRECT (with text inside mermaid block):
   ```mermaid
   graph TD
     A["Start"] --> B["Process"]
     B --> C["End"]
-    
+    %% This is a comment
     This is a simple workflow diagram showing the process flow.
   ```
-- CORRECT (text outside mermaid block):
+- CORRECT (diagram at end, no comments, no text after):
   ```mermaid
   graph TD
     A["Start"] --> B["Process"]
     B --> C["End"]
   ```
-  This is a simple workflow diagram showing the process flow.
 - Use information from the README and file structure as context.
 - Write clear, technical, and concise documentation. Use Markdown formatting.
 - Do not include any text outside the Markdown (no explanations, no code block wrappers).
@@ -548,20 +548,20 @@ You are an expert technical writer and AWS cloud architect. Generate a detailed 
   - DO: A["Lambda Function"] --> B["DynamoDB Table"]
   - DON'T: A[Lambda Function] --> B[DynamoDB Table]
 - CRITICAL: Do NOT include any explanatory text, comments, or descriptions inside the mermaid code block. The mermaid block should ONLY contain valid mermaid syntax. Place any explanations before or after the diagram in regular markdown text.
+- CRITICAL: If a diagram is included, it MUST always be the last element in the content, with no other text, explanation, or markdown after the diagram. The diagram must be at the very end of the page.
 - INCORRECT (with text inside mermaid block):
   ```mermaid
   graph TD
     A["Lambda"] --> B["DynamoDB"]
-    
+    %% This is a comment
     This diagram shows how Lambda connects to DynamoDB.
   ```
-- CORRECT (text outside mermaid block):
+- CORRECT (diagram at end, no comments, no text after):
   ```mermaid
   graph TD
     A["Lambda"] --> B["DynamoDB"]
     C["API Gateway"] --> A
   ```
-  This diagram shows how Lambda connects to DynamoDB and receives requests from API Gateway.
 - NEVER format mermaid diagrams like this (without code fences):
   mermaid
   graph TD

@@ -859,8 +859,10 @@ async def start_wiki_generation(
             progress["status"] = "indexing (RAG pipeline)"
             if not collection_exists:
                 progress["log"].append("Starting RAG pipeline with indexing (first-time indexing required)...")
+                skip_indexing = False  # Ensure indexing is performed for first-time runs
             else:
                 progress["log"].append(f"{'Starting' if force_reindex else 'Running'} RAG pipeline{' (with reindexing)' if force_reindex else ' (using existing embeddings)'}...")
+                skip_indexing = not force_reindex
             update_progress_file(progress_path, progress)
             try:
                 # Add a guard to ensure store_vectors_node is only called once per pipeline run
@@ -877,12 +879,12 @@ async def start_wiki_generation(
                 import api.langgraph.graph as graph_mod
                 graph_mod.store_vectors_node = guarded_store_vectors_node
                 
-                print(f"Calling RAG pipeline with skip_indexing={force_reindex is False}")
+                print(f"Calling RAG pipeline with skip_indexing={skip_indexing}")
                 run_rag_pipeline(
                     repo_dest,
                     "What are the key files, modules, and documentation that define the structure, architecture, and main features of this repository? Include files that are essential for understanding how the project is organized and how its main components interact.",
                     embedding_provider="ollama_nomic",
-                    skip_indexing=not force_reindex  # Note: If collection doesn't exist, run_rag_pipeline will index anyway
+                    skip_indexing=skip_indexing  # Always False for first-time indexing
                 )
             except Exception as e:
                 progress["status"] = "error"
@@ -1320,20 +1322,27 @@ DIAGRAM WITH ERRORS:
 
 Common Mermaid diagram issues include:
 1. Unquoted node labels containing spaces (should be in double quotes: A["Label with spaces"])
-2. Invalid connections between nodes
-3. Syntax errors in graph direction (should be TD, LR, etc.)
-4. Missing or mismatched quotes
-5. Non-diagram text or explanations inside the diagram (should be removed)
-6. Mismatched subgraph declarations
-7. Invalid special characters in node IDs or labels
-8. Incorrect styling syntax
+2. Unquoted edge targets or sources containing spaces (e.g., A --> Application Services should be A --> "Application Services")
+3. Invalid connections between nodes
+4. Syntax errors in graph direction (should be TD, LR, etc.)
+5. Missing or mismatched quotes
+6. Non-diagram text, comments, or explanations inside the diagram (should be removed)
+7. Mismatched subgraph declarations
+8. Invalid special characters in node IDs or labels
+9. Incorrect styling syntax
 
 Your task:
 1. Carefully analyze the diagram and error message
 2. Fix ONLY the specific syntax errors while preserving the diagram's meaning and structure
 3. Return ONLY the fixed diagram code, without any explanations or markdown fences
 4. If the error involves unquoted labels with spaces, add double quotes around all labels with spaces
-5. Remove any non-diagram text, comments, or explanations from inside the diagram
+5. Add double quotes around any node or edge label (including edge targets and sources) that contains spaces or special characters, e.g., A --> Application Services should become A --> "Application Services"
+6. Remove any non-diagram text, comments, styling, or explanations from inside the diagram. This includes:
+   - All comments (%% ...)
+   - All style or classDef/class statements
+   - Any paragraph or markdown text that is not valid mermaid syntax
+   - Any lines that are not part of the diagram definition
+7. Double-check that the output contains ONLY valid mermaid syntax and nothing else.
 
 Return ONLY the corrected Mermaid diagram code without any explanation, markdown fence, or any other text.
 """

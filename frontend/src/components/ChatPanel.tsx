@@ -2,15 +2,28 @@ import { useState, useEffect } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { SendIcon } from "lucide-react";
+import MarkdownRenderer from "./MarkdownRenderer";
 
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+  sources?: { file_path?: string; metadata?: any }[];
 }
 
 interface ChatPanelProps {
   repoId?: string;
   collectionName?: string;
+}
+
+function formatSourcePath(filePath: string) {
+  // Find the /repos/<repo_name>/ part
+  const match = filePath.match(/\/repos\/([^/]+)\/(.+)/);
+  if (match) {
+    const repo = match[1];
+    const relPath = match[2];
+    return <span><b>{repo}</b>/{relPath}</span>;
+  }
+  return filePath;
 }
 
 export default function ChatPanel({ repoId, collectionName }: ChatPanelProps) {
@@ -83,10 +96,14 @@ export default function ChatPanel({ repoId, collectionName }: ChatPanelProps) {
 
       const data = await response.json();
       
-      // Add assistant response
+      // Add assistant response with sources
       const assistantMessage: ChatMessage = { 
         role: "assistant", 
-        content: data.answer || "I couldn't generate a response based on the repository content."
+        content: data.answer || "I couldn't generate a response based on the repository content.",
+        sources: (data.retrieved_documents || []).map((doc: any) => ({
+          file_path: doc.metadata?.file_path || doc.metadata?.source || doc.source,
+          metadata: doc.metadata || {},
+        })),
       };
       
       setMessages(prev => [...prev, assistantMessage]);
@@ -134,7 +151,29 @@ export default function ChatPanel({ repoId, collectionName }: ChatPanelProps) {
               <div className="text-xs font-semibold mb-1">
                 {message.role === "user" ? "You" : "AI Assistant"}
               </div>
-              <div className="text-xs">{message.content}</div>
+              {message.role === "assistant" ? (
+                <>
+                  <MarkdownRenderer content={message.content} />
+                  {message.sources && message.sources.length > 0 && (
+                    <div className="mt-2 text-[11px] text-gray-500">
+                      <div className="font-semibold mb-1">Sources used:</div>
+                      <ol className="list-decimal list-inside">
+                        {message.sources.map((src, i) => (
+                          <li key={i} className="truncate">
+                            {src.file_path ? (
+                              <span title={src.file_path}>{formatSourcePath(src.file_path)}</span>
+                            ) : (
+                              <span>[Unknown source]</span>
+                            )}
+                          </li>
+                        ))}
+                      </ol>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="text-xs">{message.content}</div>
+              )}
             </div>
           ))
         )}

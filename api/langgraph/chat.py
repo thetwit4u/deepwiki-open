@@ -92,29 +92,12 @@ def resolve_repo_path_for_chat(repo_id: str, collection_name: str = None) -> Dic
     from api.langgraph.chroma_utils import check_collection_exists, generate_collection_name, get_persistent_dir, get_chroma_client
     from api.langgraph.wiki_structure import normalize_repo_id
     
-    # Use ollama_nomic as the embedding provider to match wiki generation
     embedding_provider = "ollama_nomic"
-    
-    # Normalize the repository ID using our consistent approach
     normalized_repo_id = normalize_repo_id(repo_id)
     print(f"Normalized repository ID: '{normalized_repo_id}' (from '{repo_id}')")
     
-    # Create variations for backward compatibility
-    repo_id_variations = [
-        repo_id,                         # Original ID
-        normalized_repo_id,              # Consistently normalized ID
-        repo_id.replace('.', '_'),       # For backward compatibility
-        repo_id.replace('-', '_'),       # For backward compatibility
-        re.sub(r'[^\w]', '_', repo_id),  # Replace all non-word chars with underscore
-        re.sub(r'[^a-zA-Z0-9]', '_', repo_id) # Replace all non-alphanumeric with underscore
-    ]
-    
-    # Remove duplicates
-    repo_id_variations = list(dict.fromkeys(repo_id_variations))
-    
     # If collection_name is provided, skip the collection search
     if collection_name:
-        # Just verify the collection exists
         persistent_dir = get_persistent_dir()
         client = get_chroma_client(persistent_dir)
         if check_collection_exists(client, collection_name):
@@ -122,38 +105,28 @@ def resolve_repo_path_for_chat(repo_id: str, collection_name: str = None) -> Dic
         else:
             print(f"Warning: Provided collection '{collection_name}' doesn't exist")
     else:
-        # Attempt to find a collection using any of the variations
-        collection_found = False
+        # Always list all collections and filter for those starting with normalized_repo_id
         persistent_dir = get_persistent_dir()
         client = get_chroma_client(persistent_dir)
-        
-        for variation in repo_id_variations:
-            try:
-                # Try to find matching collection using this variation
-                temp_collection_name = generate_collection_name(variation)
-                if check_collection_exists(client, temp_collection_name):
-                    collection_found = True
-                    collection_name = temp_collection_name
-                    # If we found a collection, update repo_id to the matching variation
-                    if variation != repo_id:
-                        print(f"Found collection using repository ID variation: '{variation}' instead of '{repo_id}'")
-                        repo_id = variation
-                    break
-            except Exception as e:
-                print(f"Error checking collection for '{variation}': {e}")
-        
-        if not collection_found:
-            # Try a custom collection name for the problematic repo
-            if repo_id == "customs_exchange_rate_main":
-                collection_name = "local_customs_exchange_rate_main_9cfa74b61a"
-                if check_collection_exists(client, collection_name):
-                    collection_found = True
-                    print(f"Using special hardcoded collection name: {collection_name}")
-        
-        if not collection_found and not collection_name:
-            error_msg = f"No existing collection found for {repo_id} with {embedding_provider} embeddings. Please generate the wiki first."
-            print(f"Error resolving repo path: {error_msg}")
-            raise ValueError(error_msg)
+        all_collections = client.list_collections()
+        # Convert to string if needed
+        all_collection_names = [str(c) for c in all_collections]
+        # Find any collection whose name starts with 'local_{normalized_repo_id}_'
+        prefix = f"local_{normalized_repo_id}_"
+        matching = [name for name in all_collection_names if name.startswith(prefix)]
+        if matching:
+            collection_name = matching[0]
+            print(f"Found collection by prefix match: {collection_name}")
+        else:
+            # Fallback to generated collection name
+            temp_collection_name = generate_collection_name(normalized_repo_id)
+            if check_collection_exists(client, temp_collection_name):
+                collection_name = temp_collection_name
+                print(f"Found collection by generated name: {collection_name}")
+            else:
+                error_msg = f"No existing collection found for {repo_id} with {embedding_provider} embeddings. Please generate the wiki first."
+                print(f"Error resolving repo path: {error_msg}")
+                raise ValueError(error_msg)
     
     # Try to find the repository directory
     try:
