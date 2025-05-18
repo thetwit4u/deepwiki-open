@@ -131,4 +131,15 @@ This document outlines the plan to refactor the DeepWiki application based on th
 *   **Support Local Repository Paths**: Medium (Frontend + Backend)
 *   **Multi-Repo Querying**: Medium to Large (DB design, API changes, RAG pipeline adjustments)
 
-This plan provides a structured approach to the refactoring. Each phase and step should be implemented iteratively, with testing at each stage. 
+This plan provides a structured approach to the refactoring. Each phase and step should be implemented iteratively, with testing at each stage.
+
+## 6. Roadmap & Future Enhancements
+
+- Integrate PydanticAI for advanced configuration, validation, and dynamic pipeline construction (planned)
+- Multi-repository querying UI and API
+- Full-text search across all indexed content
+- Advanced user settings and export features
+- Further optimize performance and accessibility
+
+> **Note:**
+> The current backend is fully LangGraph-based. All planning and future enhancements are for the new architecture. The legacy adalflow system is no longer relevant. 

@@ -143,7 +143,8 @@ Once Phase 1 is complete, we'll proceed to:
 - [ ] Implement full-text search across wiki content
 - [ ] Implement technical summary section with extracted repo stats and technologies
 - [ ] Add advanced features (e.g., export, multi-repo, user settings, etc.)
-- [ ] Further optimize performance and accessibility 
+- [ ] Further optimize performance and accessibility
+- [ ] Integrate PydanticAI for advanced configuration, validation, and dynamic pipeline construction (planned)
 
 ## Discovered During Work
 - [ ] Add ability to delete a repository (remove from wiki-data/repos and all related data)
@@ -215,3 +216,6 @@ Once Phase 1 is complete, we'll proceed to:
 ### Discovered During Work
 - The hash generation for collection names depends on the absolute path of the repository on disk, which can cause mismatches when accessing collections by repository ID alone.
 - Solution: Use the collection_name parameter explicitly with the exact name of the collection in ChromaDB or add a hardcoded mapping in the frontend API. 
+
+> **Note:**
+> All tasks and planning are for the new LangGraph-based backend. The legacy adalflow system is no longer relevant.

@@ -28,70 +28,71 @@
 - **Repository Snapshots**: Get a quick overview of the technologies, languages, and services used in the project
 - **Progressive Content Generation**: Watch the documentation generate in real-time, with visual progress tracking
 - **Ask Feature**: Chat with your repository using RAG-powered AI to get accurate answers
-- **DeepResearch**: Multi-turn research process that thoroughly investigates complex topics
 
-## 🚀 Quick Start (Super Easy!)
+## 🏃 Running the Project
 
-### Option 1: Using Docker
+### Running Locally (Development)
 
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/AsyncFuncAI/deepwiki-open.git
+   cd deepwiki-open
+   ```
+2. **Run the setup script:**
+   ```bash
+   bash scripts/setup_dev.sh
+   ```
+   This will create a virtual environment, install dependencies, and check for API keys.
+3. **Activate the virtual environment:**
+   ```bash
+   source venv/bin/activate
+   ```
+4. **Start the backend API:**
+   ```bash
+   python -m api.main
+   ```
+5. **Start the frontend (in a new terminal):**
+   ```bash
+   cd frontend
+   npm install
+   npm run dev
+   ```
+6. **Access the app:**
+   Open [http://localhost:3000](http://localhost:3000) in your browser.
+
+### Running with Docker Compose
+
+1. **Edit the .env file with your API keys** (see example above).
+2. **Build and start the app:**
+   ```bash
+   docker-compose up --build
+   ```
+   - Backend API: [http://localhost:8001](http://localhost:8001)
+   - Frontend: [http://localhost:3000](http://localhost:3000)
+
+### Running with Docker (Manual)
+
+1. **Build the Docker image:**
+   ```bash
+   docker build -t deepwiki-open .
+   ```
+2. **Run the container:**
+   ```bash
+   docker run -p 8001:8001 -p 3000:3000 \
+     -e GOOGLE_API_KEY=your_google_api_key \
+     -e OPENAI_API_KEY=your_openai_api_key \
+     -v $(pwd)/wiki-data:/app/wiki-data \
+     -v $(pwd)/wiki-data/chromadb:/app/wiki-data/chromadb \
+     deepwiki-open
+   ```
+
+### Using Utility Scripts
+
+All utility and CLI scripts are in the `/scripts` directory. For example:
 ```bash
-# Clone the repository
-git clone https://github.com/AsyncFuncAI/deepwiki-open.git
-cd deepwiki-open
-
-# Create a .env file with your API keys
-echo "GOOGLE_API_KEY=your_google_api_key" > .env
-echo "OPENAI_API_KEY=your_openai_api_key" >> .env
-
-# Run with Docker Compose
-docker-compose up
+python scripts/list_collections.py
+bash scripts/curl_test_customs_chat.sh
 ```
-
-> 💡 **Where to get these keys:**
-> - Get a Google API key from [Google AI Studio](https://makersuite.google.com/app/apikey)
-> - Get an OpenAI API key from [OpenAI Platform](https://platform.openai.com/api-keys)
-
-### Option 2: Manual Setup (Recommended)
-
-#### Step 1: Set Up Your API Keys
-
-Create a `.env` file in the project root with these keys:
-
-```
-GOOGLE_API_KEY=your_google_api_key
-OPENAI_API_KEY=your_openai_api_key
-```
-
-#### Step 2: Start the Backend
-
-```bash
-# Install Python dependencies
-pip install -r api/requirements.txt
-
-# Start the API server
-python -m api.main
-```
-
-#### Step 3: Start the Frontend
-
-```bash
-# Install JavaScript dependencies
-npm install
-# or
-yarn install
-
-# Start the web app
-npm run dev
-# or
-yarn dev
-```
-
-#### Step 4: Use DeepWiki!
-
-1. Open [http://localhost:3000](http://localhost:3000) in your browser
-2. Enter a GitHub, GitLab, or Bitbucket repository (like `https://github.com/openai/codex`, `https://github.com/microsoft/autogen`, `https://gitlab.com/gitlab-org/gitlab`, or `https://bitbucket.org/redradish/atlassian_app_versions`)
-3. For private repositories, click "+ Add access tokens" and enter your GitHub or GitLab personal access token
-4. Click "Generate Wiki" and watch the magic happen!
 
 ## 🔍 How It Works
 
@@ -103,7 +104,6 @@ DeepWiki uses AI to:
 4. Create visual diagrams to explain code relationships
 5. Organize everything into a structured wiki
 6. Enable intelligent Q&A with the repository through the Ask feature
-7. Provide in-depth research capabilities with DeepResearch
 
 ```mermaid
 graph TD
@@ -118,16 +118,18 @@ graph TD
     E --> G[Organize as Wiki]
     F --> G
     G --> H[Interactive DeepWiki]
-
-    classDef process stroke-width:2px;
-    classDef data stroke-width:2px;
-    classDef result stroke-width:2px;
-    classDef decision stroke-width:2px;
-
-    class A,D data;
-    class AA decision;
-    class B,C,E,F,G,AB process;
-    class H result;
+    H --> I[Ask Feature (RAG Chat)]
+    subgraph Docker Compose
+      K[Backend API (Python)]
+      L[Frontend (Next.js)]
+      M[Persistent Storage]
+      K <--> M
+      L <--> M
+    end
+    H --> K
+    H --> L
+    M -.-> N[wiki-data volume]
+    M -.-> O[chromadb-data volume]
 ```
 
 ## 🛠️ Project Structure
@@ -150,7 +152,17 @@ deepwiki/
 ├── public/               # Static assets
 ├── package.json          # JavaScript dependencies
 └── .env                  # Environment variables (create this)
+├── scripts/              # Utility and CLI scripts
+│   ├── list_collections.py
+│   ├── curl_test_customs_chat.sh
+│   ├── setup_dev.sh
+│   ├── verify_embeddings.py
+│   ├── generate_embeddings.py
+│   ├── test_langgraph.py
+│   └── test_api.py
 ```
+
+_All utility and CLI scripts are now in the `/scripts` directory._
 
 ## 🛠️ Advanced Setup
 
@@ -241,37 +253,6 @@ The Ask feature allows you to chat with your repository using Retrieval Augmente
 - **Real-Time Streaming**: See responses as they're generated for a more interactive experience
 - **Conversation History**: The system maintains context between questions for more coherent interactions
 
-### DeepResearch Feature
-
-DeepResearch takes repository analysis to the next level with a multi-turn research process:
-
-- **In-Depth Investigation**: Thoroughly explores complex topics through multiple research iterations
-- **Structured Process**: Follows a clear research plan with updates and a comprehensive conclusion
-- **Automatic Continuation**: The AI automatically continues research until reaching a conclusion (up to 5 iterations)
-- **Research Stages**:
-  1. **Research Plan**: Outlines the approach and initial findings
-  2. **Research Updates**: Builds on previous iterations with new insights
-  3. **Final Conclusion**: Provides a comprehensive answer based on all iterations
-
-To use DeepResearch, simply toggle the "Deep Research" switch in the Ask interface before submitting your question.
-
-## 📱 Screenshots
-
-![DeepWiki Main Interface](screenshots/Interface.png)
-*The main interface of DeepWiki*
-
-![Private Repository Support](screenshots/privaterepo.png)
-*Access private repositories with personal access tokens*
-
-![DeepResearch Feature](screenshots/DeepResearch.png)
-*DeepResearch conducts multi-turn investigations for complex topics*
-
-### Demo Video
-
-[![DeepWiki Demo Video](https://img.youtube.com/vi/zGANs8US8B4/0.jpg)](https://youtu.be/zGANs8US8B4)
-
-*Watch DeepWiki in action!*
-
 ## ❓ Troubleshooting
 
 ### API Key Issues
@@ -325,3 +306,64 @@ To find the correct collection name for a repository, use the utility script:
 ```
 
 See `docs/CHAT_API_GUIDE.md` for more details.
+
+## 🧩 LangGraph Backend (Current Implementation)
+
+DeepWiki now uses a modern, graph-based RAG backend powered by [LangGraph](https://github.com/langchain-ai/langgraph) and [LangChain]. This replaces the legacy adalflow pipeline and brings several improvements:
+
+- **Flexible Graph Architecture:** Modular, node-based RAG pipeline for indexing and chat.
+- **Enhanced Repository Support:** Works with both Git repositories and local directories.
+- **Persistent Vector Storage:** Uses ChromaDB for efficient, persistent vector storage (see Docker volumes).
+- **Improved File Filtering:** Smarter exclusion of irrelevant files (e.g., node_modules, .git).
+- **Multi-Repository Queries:** (Coming soon) Support for querying across multiple repositories.
+- **Better Configuration:** Uses Pydantic models for flexible pipeline config.
+
+### How the LangGraph Pipeline Works
+
+1. **Document Loading:** Clones repo or scans local directory, excluding irrelevant files.
+2. **Text Splitting:** Chunks documents by file type for optimal embedding.
+3. **Embedding:** Generates embeddings using OpenAI (or Ollama, optionally).
+4. **Vector Storage:** Stores vectors and metadata in ChromaDB (persisted in Docker volume).
+5. **Retrieval:** Finds relevant code/docs for your query.
+6. **Generation:** Uses Gemini (or OpenAI) to answer based on retrieved docs.
+7. **Memory:** Tracks chat history for context in multi-turn conversations.
+
+### Advanced Usage & Testing
+
+You can test the LangGraph RAG system directly:
+
+```bash
+# Test with a GitHub repo
+python -m api.test_langgraph --repo https://github.com/username/repository
+
+# Test with a local directory
+python -m api.test_langgraph --local /path/to/local/directory
+
+# Additional options:
+#   --ollama   Use Ollama models (requires Ollama running locally)
+#   --top-k N  Set number of docs to retrieve (default: 5)
+```
+
+### Project Structure (LangGraph additions)
+
+```
+api/
+  langgraph/
+    graph.py            # Main LangGraph pipeline
+    wiki_structure.py   # Wiki structure generation logic
+    chat.py             # Chat and retrieval logic
+    ...
+  test_langgraph.py     # CLI for testing LangGraph pipeline
+  langgraph_config.py   # Pipeline configuration
+```
+
+### Differences from Legacy (adalflow) Implementation
+
+- **Graph-based pipeline** (LangGraph) vs. sequential pipeline (adalflow)
+- **ChromaDB** for vector storage (persistent, efficient)
+- **Native local path support** (not just git repos)
+- **Better file filtering**
+- **Flexible config** (Pydantic)
+
+> **Note:**
+> This documentation and codebase reflect a complete rewrite of DeepWiki. All previous documentation, features, and architecture have been superseded by this new implementation.

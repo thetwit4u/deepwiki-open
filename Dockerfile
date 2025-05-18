@@ -32,7 +32,7 @@ COPY . .
 RUN NODE_ENV=production npm run build
 
 # Expose the port the app runs on
-EXPOSE ${PORT:-8001} 3000
+EXPOSE 8001 3000
 
 # Create a script to run both backend and frontend
 RUN echo '#!/bin/bash\n\
@@ -40,20 +40,21 @@ RUN echo '#!/bin/bash\n\
 if [ -f .env ]; then\n\
   export $(grep -v "^#" .env | xargs -r)\n\
 fi\n\
-\n\
+\
 # Check for required environment variables\n\
 if [ -z "$OPENAI_API_KEY" ] || [ -z "$GOOGLE_API_KEY" ]; then\n\
   echo "Warning: OPENAI_API_KEY and/or GOOGLE_API_KEY environment variables are not set."\n\
   echo "These are required for DeepWiki to function properly."\n\
   echo "You can provide them via a mounted .env file or as environment variables when running the container."\n\
 fi\n\
-\n\
+\
+# Ensure wiki-data and chromadb directories exist\n\
+mkdir -p /app/wiki-data/chromadb\n\
+\
 # Start the API server in the background with the configured port\n\
 python -m api.main --port ${PORT:-8001} &\n\
-\n\
 # Start the Next.js app on port 3000 explicitly\n\
-npm run start -- -p 3000\n\
-' > /app/start.sh && chmod +x /app/start.sh
+npm run start -- -p 3000\n' > /app/start.sh && chmod +x /app/start.sh
 
 # Set environment variables
 ENV PORT=8001
