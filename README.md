@@ -70,6 +70,10 @@
    - Backend API: [http://localhost:8001](http://localhost:8001)
    - Frontend: [http://localhost:3000](http://localhost:3000)
 
+   **Note:** Docker volumes are used for persistence:
+   - `wiki-data` (for generated wikis)
+   - `wiki-data/chromadb` (for vector storage)
+
 ### Running with Docker (Manual)
 
 1. **Build the Docker image:**
@@ -94,43 +98,52 @@ python scripts/list_collections.py
 bash scripts/curl_test_customs_chat.sh
 ```
 
-## 🔍 How It Works
+## 🔍 How the RAG Pipeline Works
 
-DeepWiki uses AI to:
+DeepWiki uses a modular, graph-based RAG pipeline powered by LangGraph:
 
-1. Clone and analyze the GitHub, GitLab, or Bitbucket repository (including private repos with token authentication)
-2. Create embeddings of the code for smart retrieval
-3. Generate documentation with context-aware AI
-4. Create visual diagrams to explain code relationships
-5. Organize everything into a structured wiki
-6. Enable intelligent Q&A with the repository through the Ask feature
+1. **Document Loading:** Clones the repo or scans a local directory, excluding irrelevant files.
+2. **Text Splitting:** Chunks documents by file type for optimal embedding.
+3. **Embedding:** Generates embeddings using OpenAI or Ollama.
+4. **Vector Storage:** Stores vectors and metadata in ChromaDB (persisted in Docker volume).
+5. **Retrieval:** Finds relevant code/docs for your query.
+6. **Generation:** Uses Gemini (or OpenAI) to answer based on retrieved docs.
+7. **Memory:** Tracks chat history for context in multi-turn conversations.
 
-```mermaid
-graph TD
-    A[User inputs GitHub/GitLab/Bitbucket repo] --> AA{Private repo?}
-    AA -->|Yes| AB[Add access token]
-    AA -->|No| B[Clone Repository]
-    AB --> B
-    B --> C[Analyze Code Structure]
-    C --> D[Create Code Embeddings]
-    D --> E[Generate Documentation]
-    D --> F[Create Visual Diagrams]
-    E --> G[Organize as Wiki]
-    F --> G
-    G --> H[Interactive DeepWiki]
-    H --> I[Ask Feature (RAG Chat)]
-    subgraph Docker Compose
-      K[Backend API (Python)]
-      L[Frontend (Next.js)]
-      M[Persistent Storage]
-      K <--> M
-      L <--> M
-    end
-    H --> K
-    H --> L
-    M -.-> N[wiki-data volume]
-    M -.-> O[chromadb-data volume]
+There are two main pipeline modes:
+- **Full Pipeline (Indexing + Retrieval):** Used when a repo is first added or reindexed. Runs all steps above.
+- **Retrieval-Only Mode:** Used for chat/questions after indexing. Only runs retrieval, generation, and memory nodes.
+
+You can test the pipeline directly:
+```bash
+# Test with a GitHub repo
+python -m api.test_langgraph --repo https://github.com/username/repository
+
+# Test with a local directory
+python -m api.test_langgraph --local /path/to/local/directory
+
+# Additional options:
+#   --ollama   Use Ollama models (requires Ollama running locally)
+#   --top-k N  Set number of docs to retrieve (default: 5)
 ```
+
+## 🧩 Collection Name Resolution
+
+When resolving ChromaDB collections, DeepWiki will (soon) support prefix-based matching to handle cases where collection names have unique suffixes. For now, ensure you use the full collection name as listed by the utility scripts.
+
+## 🧩 LangGraph Backend (Current Implementation)
+
+DeepWiki now uses a modern, graph-based RAG backend powered by [LangGraph](https://github.com/langchain-ai/langgraph) and [LangChain]. This replaces the legacy adalflow pipeline and brings several improvements:
+
+- **Flexible Graph Architecture:** Modular, node-based RAG pipeline for indexing and chat.
+- **Enhanced Repository Support:** Works with both Git repositories and local directories.
+- **Persistent Vector Storage:** Uses ChromaDB for efficient, persistent vector storage (see Docker volumes).
+- **Improved File Filtering:** Smarter exclusion of irrelevant files (e.g., node_modules, .git).
+- **Multi-Repository Queries:** (Coming soon) Support for querying across multiple repositories.
+- **Better Configuration:** Uses Pydantic models for flexible pipeline config.
+
+> **Note:**
+> This documentation and codebase reflect a complete rewrite of DeepWiki. All previous documentation, features, and architecture have been superseded by this new implementation.
 
 ## 🛠️ Project Structure
 
@@ -306,64 +319,3 @@ To find the correct collection name for a repository, use the utility script:
 ```
 
 See `docs/CHAT_API_GUIDE.md` for more details.
-
-## 🧩 LangGraph Backend (Current Implementation)
-
-DeepWiki now uses a modern, graph-based RAG backend powered by [LangGraph](https://github.com/langchain-ai/langgraph) and [LangChain]. This replaces the legacy adalflow pipeline and brings several improvements:
-
-- **Flexible Graph Architecture:** Modular, node-based RAG pipeline for indexing and chat.
-- **Enhanced Repository Support:** Works with both Git repositories and local directories.
-- **Persistent Vector Storage:** Uses ChromaDB for efficient, persistent vector storage (see Docker volumes).
-- **Improved File Filtering:** Smarter exclusion of irrelevant files (e.g., node_modules, .git).
-- **Multi-Repository Queries:** (Coming soon) Support for querying across multiple repositories.
-- **Better Configuration:** Uses Pydantic models for flexible pipeline config.
-
-### How the LangGraph Pipeline Works
-
-1. **Document Loading:** Clones repo or scans local directory, excluding irrelevant files.
-2. **Text Splitting:** Chunks documents by file type for optimal embedding.
-3. **Embedding:** Generates embeddings using OpenAI (or Ollama, optionally).
-4. **Vector Storage:** Stores vectors and metadata in ChromaDB (persisted in Docker volume).
-5. **Retrieval:** Finds relevant code/docs for your query.
-6. **Generation:** Uses Gemini (or OpenAI) to answer based on retrieved docs.
-7. **Memory:** Tracks chat history for context in multi-turn conversations.
-
-### Advanced Usage & Testing
-
-You can test the LangGraph RAG system directly:
-
-```bash
-# Test with a GitHub repo
-python -m api.test_langgraph --repo https://github.com/username/repository
-
-# Test with a local directory
-python -m api.test_langgraph --local /path/to/local/directory
-
-# Additional options:
-#   --ollama   Use Ollama models (requires Ollama running locally)
-#   --top-k N  Set number of docs to retrieve (default: 5)
-```
-
-### Project Structure (LangGraph additions)
-
-```
-api/
-  langgraph/
-    graph.py            # Main LangGraph pipeline
-    wiki_structure.py   # Wiki structure generation logic
-    chat.py             # Chat and retrieval logic
-    ...
-  test_langgraph.py     # CLI for testing LangGraph pipeline
-  langgraph_config.py   # Pipeline configuration
-```
-
-### Differences from Legacy (adalflow) Implementation
-
-- **Graph-based pipeline** (LangGraph) vs. sequential pipeline (adalflow)
-- **ChromaDB** for vector storage (persistent, efficient)
-- **Native local path support** (not just git repos)
-- **Better file filtering**
-- **Flexible config** (Pydantic)
-
-> **Note:**
-> This documentation and codebase reflect a complete rewrite of DeepWiki. All previous documentation, features, and architecture have been superseded by this new implementation.
